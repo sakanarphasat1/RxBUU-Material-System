@@ -1,7 +1,7 @@
 <!-- 📌 ปุ่มควบคุมหลังบันทึกข้อมูลสำเร็จ (แสดงเฉพาะบนหน้าจอ ซ่อนเมื่อสั่งพิมพ์) -->
 <div id="postSaveActions" class="preview-actions no-print" style="display: none; justify-content: center; align-items: center; gap: 15px; margin-top: 20px; margin-bottom: 20px;">
     <button type="button" class="btn btn-secondary" onclick="backToForm()">🔙 ย้อนกลับหน้าแรก</button>
-    <button type="button" class="btn btn-primary" onclick="printDoc()">🖨️ พิมพ์ใบเบิกพัสดุ (A4)</button>
+    <button type="button" class="btn btn-primary" onclick="printDoc()">🖨️ พิมพ์ใบเบิกวัสดุ (A4)</button>
     <button type="button" class="btn btn-danger" onclick="exportToPDF()">📄 บันทึกเป็นไฟล์ PDF</button>
 </div>
 
@@ -48,7 +48,7 @@
         </tr>
     </table>
 
-    <!-- ตารางรายการพัสดุ A4 -->
+    <!-- ตารางรายการวัสดุ A4 -->
     <table class="a4-materials-table">
         <thead>
             <tr>
@@ -56,7 +56,7 @@
                 <th rowspan="2" style="width: 42%;">รายการ</th>
                 <th rowspan="2" style="width: 10%;">จำนวน</th>
                 <th rowspan="2" style="width: 10%;">หน่วยนับ</th>
-                <th colspan="3" class="section-supply-title">ส่วนงานพัสดุ</th>
+                <th colspan="3" class="section-supply-title">ส่วนงานวัสดุ</th>
             </tr>
             <tr>
                 <th style="width: 10%;">รหัสวัสดุ</th>
@@ -74,7 +74,7 @@
             </tr>
         </thead>
         
-        <!-- พื้นที่รับข้อมูลรายการพัสดุจาก script.js (mapDataToA4Preview) -->
+        <!-- พื้นที่รับข้อมูลรายการวัสดุจาก script.js (mapDataToA4Preview) -->
         <tbody id="previewTableBody">
             <!-- ข้อมูลจะถูกวาดลงตรงนี้ด้วย JavaScript -->
         </tbody>
@@ -101,7 +101,7 @@
         </tr>
         <tr class="sig-title-row">
             <td>ผู้ขอเบิก/ผู้รับของ</td>
-            <td>หัวหน้าหน่วยพัสดุ</td>
+            <td>หัวหน้าหน่วยวัสดุ</td>
         </tr>
         
         <tr class="sig-line-row" style="padding-top: 30px;">
