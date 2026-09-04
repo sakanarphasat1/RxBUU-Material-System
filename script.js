@@ -756,9 +756,9 @@ window.resetForm = function() {
     }
 };
 
-window.printDoc = function() {
-    window.print();
-};
+// window.printDoc = function() {
+//     window.print();
+// };
 
 window.openDriveFolder = function() {
     const pdfFileId = "1qsFQ01jGrgofyYvxxxrJ6rOPYJyoIZBW"; 
