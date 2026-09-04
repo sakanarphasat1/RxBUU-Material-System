@@ -1,2 +1,2 @@
-# pharmacy-material-system
+# RxBUU Material System
 ระบบใบเบิกวัสดุ คณะเภสัชศาสตร์
