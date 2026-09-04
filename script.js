@@ -204,12 +204,12 @@ function initDefaultDate() {
 }
 
 // ==========================================================
-// 💥 ส่วนที่ 3: จัดการข้อมูลรายการพัสดุ
+// 💥 ส่วนที่ 3: จัดการข้อมูลรายการวัสดุ
 // ==========================================================
 
 async function fetchMaterialList(retryCount = 1, maxRetries = 3) {
     if (retryCount === 1) {
-        setDropdownsStatus("-- กำลังโหลดข้อมูลพัสดุ... --");
+        setDropdownsStatus("-- กำลังโหลดข้อมูลวัสดุ... --");
     } else {
         setDropdownsStatus(`-- กำลังพยายามเชื่อมต่อใหม่ (ครั้งที่ ${retryCount}/${maxRetries})... --`);
     }
@@ -237,14 +237,14 @@ async function fetchMaterialList(retryCount = 1, maxRetries = 3) {
         if (result && result.success && Array.isArray(result.data)) {
             globalMaterialList = result.data;
             renderAllDropdowns();
-            console.log("✅ โหลดข้อมูลพัสดุสำเร็จ");
+            console.log("✅ โหลดข้อมูลวัสดุสำเร็จ");
             return;
         } else {
-            throw new Error(result ? result.message : "ไม่พบข้อมูลพัสดุ");
+            throw new Error(result ? result.message : "ไม่พบข้อมูลวัสดุ");
         }
 
     } catch (error) {
-        console.warn(`⚠️ ดึงข้อมูลพัสดุล้มเหลว ครั้งที่ ${retryCount}/${maxRetries}:`, error.message);
+        console.warn(`⚠️ ดึงข้อมูลวัสดุล้มเหลว ครั้งที่ ${retryCount}/${maxRetries}:`, error.message);
 
         if (retryCount < maxRetries) {
             await new Promise(resolve => setTimeout(resolve, 2000));
@@ -254,10 +254,10 @@ async function fetchMaterialList(retryCount = 1, maxRetries = 3) {
             console.error("❌ พยายามเชื่อมต่อครบ 3 ครั้งแล้วไม่สำเร็จ");
             if (globalMaterialList && globalMaterialList.length > 0) {
                 renderAllDropdowns();
-                alert("⚠️ ไม่สามารถอัปเดตรายการพัสดุล่าสุดได้ ระบบจะใช้ข้อมูลรายการเดิมชั่วคราวครับ");
+                alert("⚠️ ไม่สามารถอัปเดตรายการวัสดุล่าสุดได้ ระบบจะใช้ข้อมูลรายการเดิมชั่วคราวครับ");
             } else {
                 setDropdownsStatus("-- การเชื่อมต่อขัดข้อง (กดที่นี่เพื่อลองใหม่) --");
-                alert("⛔ ไม่สามารถดึงข้อมูลรายการพัสดุได้หลังจากพยายาม 3 ครั้ง\nกรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต แล้วลองใหม่อีกครั้งครับ");
+                alert("⛔ ไม่สามารถดึงข้อมูลรายการวัสดุได้หลังจากพยายาม 3 ครั้ง\nกรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต แล้วลองใหม่อีกครั้งครับ");
             }
         }
     }
@@ -280,7 +280,7 @@ function renderAllDropdowns() {
 window.updateMaterialDropdown = function(selectElement) {
     if (!selectElement) return;
     
-    selectElement.innerHTML = `<option value="">-- เลือกรายการพัสดุ --</option>`;
+    selectElement.innerHTML = `<option value="">-- เลือกรายการวัสดุ --</option>`;
     if (globalMaterialList && globalMaterialList.length > 0) {
         globalMaterialList.forEach(mat => {
             const opt = document.createElement('option');
@@ -297,7 +297,7 @@ window.updateMaterialDropdown = function(selectElement) {
             selectElement.appendChild(opt);
         });
     } else {
-        selectElement.innerHTML = `<option value="">-- ไม่มีข้อมูลพัสดุในระบบ --</option>`;
+        selectElement.innerHTML = `<option value="">-- ไม่มีข้อมูลวัสดุในระบบ --</option>`;
     }
 };
 
@@ -314,7 +314,7 @@ window.onMaterialChange = function(selectEl) {
         const currentStock = Number(selectedOption.getAttribute('data-stock') || 0);
         
         if (currentStock <= 0) {
-            alert(`❌ รายการพัสดุนี้หมดคลังแล้วครับ (คงเหลือ 0) ไม่สามารถเลือกเบิกได้ครับ`);
+            alert(`❌ รายการวัสดุนี้หมดคลังแล้วครับ (คงเหลือ 0) ไม่สามารถเลือกเบิกได้ครับ`);
             selectEl.value = "";
             if (codeInput) codeInput.value = "";
             if (unitInput) unitInput.value = "";
@@ -353,7 +353,7 @@ window.checkQuantityLimit = function(inputEl) {
     }
     
     if (enteredQty > maxStock) {
-        alert(`❌ ไม่สามารถเบิกได้เนื่องจากจำนวนสินค้าไม่พอ\n(พัสดุชิ้นนี้คงเหลือในคลังเพียง ${maxStock} เท่านั้น)`);
+        alert(`❌ ไม่สามารถเบิกได้เนื่องจากจำนวนสินค้าไม่พอ\n(วัสดุชิ้นนี้คงเหลือในคลังเพียง ${maxStock} เท่านั้น)`);
         inputEl.value = maxStock;
     }
 };
@@ -522,7 +522,7 @@ window.handleFormSubmit = async function(actionType) {
     });
 
     if (items.length === 0 || hasError) {
-        alert("กรุณาเลือกรายการพัสดุให้ครบถ้วนก่อนดำเนินการครับ");
+        alert("กรุณาเลือกรายการวัสดุให้ครบถ้วนก่อนดำเนินการครับ");
         return;
     }
     // 🟢 เพิ่มการตรวจสอบไม่ให้เกิน 11 รายการก่อน บันทึก/พรีวิว
@@ -731,7 +731,7 @@ window.resetForm = function() {
                 <td class="row-index" style="text-align: center;">1</td>
                 <td>
                     <select id="itemSelect1" class="item-name" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #BDC3C7;" required onchange="onMaterialChange(this)">
-                        <option value="">-- เลือกรายการพัสดุ --</option>
+                        <option value="">-- เลือกรายการวัสดุ --</option>
                     </select>
                 </td>
                 <td><input type="number" class="item-qty" min="1" required placeholder="0"></td>
@@ -787,7 +787,7 @@ window.exportToPDF = async function() {
     const element = document.getElementById('previewSection');
 
     if (!element) {
-        alert("ไม่พบเอกสารใบเบิกพัสดุครับ");
+        alert("ไม่พบเอกสารใบเบิกวัสดุครับ");
         return;
     }
 
@@ -799,7 +799,7 @@ window.exportToPDF = async function() {
 
     const today = new Date();
     const dateString = `${today.getFullYear()}-${today.getMonth() + 1}-${today.getDate()}`;
-    const fileName = `ใบเบิกพัสดุ_${dateString}.pdf`;
+    const fileName = `ใบเบิกวัสดุ_${dateString}.pdf`;
 
     // 🟢 เพิ่ม Class กระชับพื้นที่สำหรับจับภาพเป็น PDF
     element.classList.add('pdf-print-fit');
