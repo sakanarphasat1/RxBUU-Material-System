@@ -280,7 +280,7 @@ function renderAllDropdowns() {
 window.updateMaterialDropdown = function(selectElement) {
     if (!selectElement) return;
     
-    selectElement.innerHTML = `<option value="">-- เลือกรายการวัสดุ --</option>`;
+    selectElement.innerHTML = `<option value="">-- เลือกรายการวัสดุสำนักงาน --</option>`;
     if (globalMaterialList && globalMaterialList.length > 0) {
         globalMaterialList.forEach(mat => {
             const opt = document.createElement('option');
