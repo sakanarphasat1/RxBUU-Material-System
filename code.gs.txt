@@ -1,0 +1,1021 @@
+/**
+ * 🌐 ฟังก์ชันรับ HTTP GET Request 
+ */
+function doGet(e) {
+  return createJsonResponse({ 
+    success: true, 
+    message: "Google Apps Script API พร้อมใช้งานแล้ว!" 
+  });
+}
+
+/**
+ * 🌐 ฟังก์ชันรับ HTTP POST Request จาก GitHub Pages (API Main Endpoint)
+ */
+function doPost(e) {
+  let responseData = { success: false, message: "Invalid action" };
+  
+  try {
+    if (!e || !e.postData || !e.postData.contents) {
+      return createJsonResponse({ success: false, message: "ไม่ได้รับข้อมูล Post Data" });
+    }
+
+    const contents = JSON.parse(e.postData.contents);
+    const action = contents.action;
+
+    // 1. Action: ตรวจสอบสิทธิ์ผู้ใช้งานจาก Email
+    if (action === "checkUser") {
+      responseData = checkUserPermission(contents.email, contents.idToken);
+    } 
+    // 2. Action: ดึงรายชื่อวัสดุ
+    else if (action === "getMaterials") {
+      responseData = getMaterialList(contents.idToken);
+    } 
+    // 3. Action: บันทึกข้อมูลใบเบิกวัสดุ + ส่งอีเมลพร้อม PDF แนบ
+    else if (action === "saveData") {
+      // 🔒 ยืนยันตัวตนด้วย Firebase ID token เท่านั้น ไม่เชื่อ email ที่ส่งมาใน body
+      const authResult = verifyIdToken(contents.idToken);
+      if (!authResult.ok) {
+        responseData = { success: false, message: "การยืนยันตัวตนล้มเหลว " + authResult.error + "\nกรุณาออกจากระบบแล้วล็อกอินใหม่" };
+      } else {
+        responseData = saveData(contents.formData, authResult.email, contents.requestId);
+      }
+    }
+    // 4. Action: ดึงประวัติการเบิกย้อนหลังของผู้ใช้งาน
+    // 🔒 ดึงได้เฉพาะของตัวเอง โดยใช้อีเมลจาก token เท่านั้น
+    else if (action === "getUserHistory") {
+      const authResult = verifyIdToken(contents.idToken);
+      if (!authResult.ok) {
+        responseData = { success: false, message: "การยืนยันตัวตนล้มเหลว " + authResult.error + "\nกรุณาออกจากระบบแล้วล็อกอินใหม่" };
+      } else {
+        responseData = getUserHistory(authResult.email);
+      }
+    }
+    // 5. Action: ตรวจ token เฉยๆ (ไม่แตะข้อมูล) — ใช้เช็กว่าฝั่งเซิร์ฟเวอร์ยืนยันตัวตนผ่านแล้วหรือยัง
+    else if (action === "verifyToken") {
+      const check = verifyIdToken(contents.idToken);
+      responseData = check.ok
+        ? { success: true, email: check.email }
+        : { success: false, message: check.error };
+    }
+    // 6. Action: วินิจฉัยประวัติ (อ่านอย่างเดียว ต้องยืนยันตัวตน) — ใช้หาสาเหตุเวลา “ไม่พบประวัติ”
+    else if (action === "historyDiag") {
+      const check = verifyIdToken(contents.idToken);
+      responseData = check.ok
+        ? diagnoseHistory(check.email)
+        : { success: false, message: "การยืนยันตัวตนล้มเหลว " + check.error };
+    }
+    
+  } catch (err) {
+    responseData = { success: false, message: "Server Error: " + err.toString() };
+  }
+
+  return createJsonResponse(responseData);
+}
+
+/**
+ * 🧼 หนี HTML ก่อนนำค่าไปประกอบเป็นเอกสาร PDF/อีเมล
+ * (กันชื่อวัสดุหรือชื่อผู้เบิกที่มีแท็ก HTML ทำให้เอกสารพังหรือแทรกโค้ด)
+ */
+function escapeHtml_(value) {
+  return String(value === null || value === undefined ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * 🛠️ ฟังก์ชันช่วยแปลงข้อมูลเป็น JSON Output
+ */
+function createJsonResponse(data) {
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+const FIREBASE_PROJECT_ID = "pharmacy-material-system";
+const SECURETOKEN_ISSUER = "https://securetoken.google.com/" + FIREBASE_PROJECT_ID;
+
+// 🔑 API key สำรอง (ใช้เฉพาะทางเลือกที่ 2 เท่านั้น — ทางหลักคือ tokeninfo ที่ไม่ต้องใช้ key)
+const WEB_API_KEY = "AIzaSyC-IKwMD7-vkuG0moT24EAsSyxaV8Xty6c";
+
+/**
+ * 🔒 ต้องล็อกอินก่อนจึงจะดึงรายการวัสดุได้ (เพราะมี "คงเหลือ" ติดมาด้วย)
+ * ตั้งเป็น false เฉพาะกรณีที่ต้องการให้หน้าเว็บพรีโหลดรายการก่อนผู้ใช้ล็อกอินเท่านั้น
+ */
+const REQUIRE_AUTH_FOR_MATERIALS = true;
+
+/**
+ * 🔓 รันฟังก์ชันนี้ 1 ครั้งในหน้า Apps Script editor เพื่อ "ขอสิทธิ์ UrlFetchApp"
+ * (scope https://www.googleapis.com/auth/script.external_request) แล้วกด Allow
+ * จากนั้นต้อง Deploy → จัดการการทำให้ใช้งานได้ → แก้ไข → เวอร์ชัน: ใหม่ → Deploy อีกครั้ง
+ */
+function authorizeExternalRequest() {
+  const resp = UrlFetchApp.fetch(
+    "https://oauth2.googleapis.com/tokeninfo?id_token=dummy",
+    { muteHttpExceptions: true }
+  );
+  console.log("UrlFetchApp ใช้งานได้แล้ว — HTTP " + resp.getResponseCode());
+}
+
+/**
+ * 🧩 แกะ payload ของ JWT (ตรวจรูปแบบ + วันหมดอายุเร็วๆ ก่อนยิงเน็ต — ไม่ได้ยืนยันลายเซ็น)
+ */
+function decodeJwtPayload_(idToken) {
+  try {
+    const parts = String(idToken).split(".");
+    if (parts.length !== 3) return null;
+    let b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    while (b64.length % 4 !== 0) b64 += "=";
+    const text = Utilities.newBlob(Utilities.base64Decode(b64)).getDataAsString("UTF-8");
+    return JSON.parse(text);
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * 📡 เรียก URL แล้วคืนผลเสมอ (ไม่โยน exception) เพื่อให้เห็นสาเหตุจริงเวลา error
+ */
+function fetchJsonSafe_(url, options) {
+  try {
+    const resp = UrlFetchApp.fetch(url, Object.assign({ muteHttpExceptions: true }, options || {}));
+    const raw = resp.getContentText() || "";
+    let data = null;
+    try { data = JSON.parse(raw); } catch (e) { /* ไม่ใช่ JSON */ }
+    return { status: resp.getResponseCode(), raw: raw, data: data };
+  } catch (e) {
+    return { status: 0, raw: String(e && e.message ? e.message : e), data: null };
+  }
+}
+
+/**
+ * 🔐 ยืนยัน Firebase ID token กับ Google
+ * คืน { ok: true, email } เมื่อผ่าน / { ok: false, error } เมื่อไม่ผ่าน (พร้อมรหัสสาเหตุ)
+ * ทางหลัก: tokeninfo (ไม่ใช้ API key) → ทางสำรอง: accounts:lookup ด้วย API key
+ * กันไม่ให้ใครยิงคำขอตรงมาอ่าน-เขียนข้อมูลของคนอื่นโดยไม่ได้ล็อกอิน
+ */
+function verifyIdToken(idToken) {
+  if (!idToken) return { ok: false, error: "AUTH-01: หน้าเว็บไม่ได้แนบ ID token มา" };
+
+  const payload = decodeJwtPayload_(idToken);
+  if (!payload) return { ok: false, error: "AUTH-02: รูปแบบ token ไม่ถูกต้อง" };
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (payload.exp && Number(payload.exp) <= nowSec) {
+    return { ok: false, error: "AUTH-03: token หมดอายุแล้ว" };
+  }
+
+  const attempts = [];
+
+  // 1) ทางหลัก: tokeninfo — ไม่ใช้ API key จึงไม่ติดข้อจำกัดของ key
+  const infoRes = fetchJsonSafe_(
+    "https://oauth2.googleapis.com/tokeninfo?id_token=" + encodeURIComponent(String(idToken))
+  );
+  if (infoRes.status === 200 && infoRes.data && infoRes.data.email) {
+    const aud = String(infoRes.data.aud || "");
+    const iss = String(infoRes.data.iss || "");
+
+    if (aud !== FIREBASE_PROJECT_ID) {
+      return { ok: false, error: "AUTH-05: token ออกให้โปรเจกต์อื่น (aud=" + aud + ")" };
+    }
+    if (iss !== SECURETOKEN_ISSUER && iss !== "accounts.google.com") {
+      return { ok: false, error: "AUTH-06: ผู้ออก token ไม่ใช่ Firebase ของระบบนี้ (iss=" + iss + ")" };
+    }
+    return { ok: true, email: String(infoRes.data.email).toLowerCase().trim() };
+  }
+  attempts.push("tokeninfo HTTP " + infoRes.status + " " + String(infoRes.raw).slice(0, 120));
+
+  // 2) ทางสำรอง: accounts:lookup ด้วย API key ของโปรเจกต์
+  const lookupRes = fetchJsonSafe_(
+    "https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=" + WEB_API_KEY,
+    {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify({ idToken: String(idToken) })
+    }
+  );
+  if (lookupRes.status === 200 && lookupRes.data && lookupRes.data.users && lookupRes.data.users.length) {
+    const u = lookupRes.data.users[0];
+    const email = String(u.email || u.localId || "").toLowerCase().trim();
+    if (email) return { ok: true, email: email };
+  }
+  attempts.push("lookup HTTP " + lookupRes.status + " " + String(lookupRes.raw).slice(0, 120));
+
+  const detail = attempts.join(" | ");
+  console.error("verifyIdToken ล้มเหลว: " + detail);
+
+  // 3) แยกข้อความให้รู้ว่าต้องแก้ตรงไหน
+  const permissionIssue = /permission|authoriz|scope|not been granted/i.test(detail);
+  if (permissionIssue) {
+    return { ok: false, error: "AUTH-04: Apps Script ยังไม่ได้รับสิทธิ์เรียก UrlFetchApp — รันฟังก์ชัน authorizeExternalRequest 1 ครั้งแล้ว Deploy เวอร์ชันใหม่ (" + detail + ")" };
+  }
+  return { ok: false, error: "AUTH-07: ยืนยัน token กับ Google ไม่สำเร็จ — " + detail };
+}
+
+/**
+ * 🔒 ตรวจสอบสิทธิ์ผู้ใช้งานจากแผ่นงาน UserMaster
+ */
+function checkUserPermission(userEmail, idToken) {
+  try {
+    if (!userEmail) {
+      return { success: false, isAllowed: false, allowed: false, message: "ไม่พบอีเมลผู้ใช้งาน" };
+    }
+    
+    const cleanEmail = String(userEmail).toLowerCase().trim();
+
+    // 🔒 ถ้ามี ID token ส่งมาด้วย ให้ยืนยันว่าอีเมลที่ขอตรวจเป็นของเจ้าของ token จริง
+    //    เดิมไม่ตรวจเลย ใครระบุอีเมลของใครก็ได้คำตอบกลับไป (รวมถึงชื่อ-นามสกุล)
+    let identityVerified = false;
+    if (idToken) {
+      const tokenCheck = verifyIdToken(idToken);
+      identityVerified = tokenCheck.ok &&
+        String(tokenCheck.email || "").toLowerCase().trim() === cleanEmail;
+    }
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const userSheet = ss.getSheetByName("UserMaster");
+    
+    if (!userSheet) {
+      return { success: false, isAllowed: false, allowed: false, message: "ไม่พบแผ่นงาน UserMaster" };
+    }
+
+    const userData = userSheet.getDataRange().getValues();
+    let foundUser = null;
+
+    for (let i = 1; i < userData.length; i++) {
+      const sheetEmail = String(userData[i][0] || "").toLowerCase().trim();
+      const fullName = String(userData[i][1] || "").trim();
+
+      if (sheetEmail === cleanEmail) {
+        foundUser = { email: cleanEmail, fullName: fullName };
+        break;
+      }
+    }
+
+    if (foundUser) {
+      return {
+        success: true,
+        isAllowed: true,
+        allowed: true,
+        email: foundUser.email,
+        identityVerified: identityVerified,
+        // ส่งชื่อ-นามสกุลจากทะเบียนเฉพาะเมื่อยืนยันตัวตนได้แล้วเท่านั้น
+        fullName: identityVerified ? foundUser.fullName : ""
+      };
+    } else {
+      return { 
+        success: true, 
+        isAllowed: false, 
+        allowed: false, 
+        email: cleanEmail, 
+        message: `⛔ บัญชี (${cleanEmail}) ไม่มีสิทธิ์เข้าใช้งานระบบ` 
+      };
+    }
+  } catch (error) {
+    return { success: false, isAllowed: false, allowed: false, message: error.toString() };
+  }
+}
+
+/**
+ * 📄 ฟังก์ชันสร้างไฟล์ PDF ใบเบิกวัสดุ
+ */
+function generatePdfBlob(formData) {
+  const esc = escapeHtml_; // 🧼 หนี HTML ทุกค่าที่แทรกลงเอกสาร
+  const requesterName = formData.requesterName || "-";
+  const supplyHeadName = formData.supplyHeadName || "นายสุบัณฑิต พุ่มเจริญ";
+  const accountantName = formData.accountantName || "นางสาววิษณีย์ เวรุตัง";
+  
+  const organization = formData.organization || "คณะเภสัชศาสตร์";
+  const docDate = formData.docDate || "-";
+  const moneySource = formData.moneySource || "รายได้ คณะเภสัชศาสตร์ มหาวิทยาลัยบูรพา";
+  const workPlan = formData.workPlan || "";
+
+  const logoUrl = "https://raw.githubusercontent.com/sakanarphasat1/RxBUU-Material-System/main/logo.jpg";
+
+  let tableRowsHtml = "";
+  if (Array.isArray(formData.items) && formData.items.length > 0) {
+    formData.items.forEach((item, index) => {
+      // 🟢 แสดงเลขที่ใบเบิก/ใบสั่งจ่าย เฉพาะรายการที่ 1 เท่านั้น (แถวอื่นเว้นว่าง)
+      const isFirstRow = index === 0;
+      tableRowsHtml += `
+        <tr>
+          <td style="text-align: center; border: 1px solid #000; padding: 4px; font-weight: normal;">${index + 1}</td>
+          <td style="border: 1px solid #000; padding: 4px; font-weight: normal;">${esc(item.name || "-")}</td>
+          <td style="text-align: center; border: 1px solid #000; padding: 4px; font-weight: normal;">${esc(item.qty || 0)}</td>
+          <td style="text-align: center; border: 1px solid #000; padding: 4px; font-weight: normal;">${esc(item.unit || "-")}</td>
+          <td style="text-align: center; border: 1px solid #000; padding: 4px; font-weight: normal;">${esc(item.code || "-")}</td>
+          <td style="text-align: center; border: 1px solid #000; padding: 4px; font-weight: normal;">${isFirstRow ? esc(item.reqNo || "-") : ""}</td>
+          <td style="text-align: center; border: 1px solid #000; padding: 4px; font-weight: normal;">${isFirstRow ? esc(item.payNo || "-") : ""}</td>
+        </tr>
+      `;
+    });
+  } else {
+    tableRowsHtml = `
+      <tr>
+        <td colspan="7" style="text-align: center; border: 1px solid #000; padding: 8px; font-weight: normal;">ไม่พบรายการวัสดุ</td>
+      </tr>
+    `;
+  }
+
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400&display=swap');
+        * { font-weight: normal !important; }
+        body { font-family: 'Sarabun', sans-serif; font-size: 16px; color: #000; margin: 0; padding: 10px; }
+        .doc-id { text-align: right; font-size: 16px; margin-bottom: 5px; }
+        .header-center { text-align: center; margin-bottom: 15px; }
+        .buu-logo { width: 70px; height: auto; margin-bottom: 5px; }
+        .uni-title, .doc-title { font-size: 16px; margin-top: 2px; }
+        .metadata-table { width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 16px; }
+        .metadata-table td { padding: 3px 0; vertical-align: bottom; }
+        .dotted-field { border-bottom: 1px dotted #000000; padding-left: 5px; }
+        .materials-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 16px; }
+        .materials-table th, .materials-table td { border: 1px solid #000000; padding: 4px; }
+        .materials-table th { text-align: center; background-color: #ffffff; }
+        .signatures-table { width: 100%; border-collapse: collapse; margin-top: 35px; font-size: 16px; }
+        .signatures-table td { width: 50%; text-align: center; padding: 3px 0; vertical-align: top; }
+      </style>
+    </head>
+    <body>
+      <div class="doc-id">เลขที่ 510000...........</div>
+      <div class="header-center">
+        <img src="${logoUrl}" class="buu-logo" alt="BUU Logo">
+        <div class="uni-title">คณะเภสัชศาสตร์ มหาวิทยาลัยบูรพา</div>
+        <div class="doc-title">ใบเบิกวัสดุ</div>
+      </div>
+      <table class="metadata-table">
+        <tr>
+          <td style="width: 10%; white-space: nowrap;">แหล่งเงิน</td>
+          <td style="width: 50%;" class="dotted-field">${esc(moneySource)}</td>
+          <td style="width: 12%; padding-left: 15px; white-space: nowrap;">หน่วยงาน</td>
+          <td style="width: 28%;" class="dotted-field">${esc(organization)}</td>
+        </tr>
+        <tr>
+          <td>แผนงาน</td>
+          <td class="dotted-field">${esc(workPlan)}</td>
+          <td style="padding-left: 15px;">กองทุน</td>
+          <td class="dotted-field"></td>
+        </tr>
+        <tr>
+          <td>งาน</td>
+          <td class="dotted-field"></td>
+          <td style="padding-left: 15px;">หมวด</td>
+          <td class="dotted-field"></td>
+        </tr>
+        <tr>
+          <td></td>
+          <td></td>
+          <td style="padding-left: 15px; white-space: nowrap;">วันที่</td>
+          <td class="dotted-field">${esc(docDate)}</td>
+        </tr>
+      </table>
+
+      <table class="materials-table">
+        <thead>
+          <tr>
+            <th rowspan="2" style="width: 8%;">ลำดับที่</th>
+            <th rowspan="2" style="width: 38%;">รายการ</th>
+            <th rowspan="2" style="width: 8%;">จำนวน</th>
+            <th rowspan="2" style="width: 10%;">หน่วยนับ</th>
+            <th colspan="3" style="width: 36%;">ส่วนงานวัสดุ</th>
+          </tr>
+          <tr>
+            <th style="width: 12%;">รหัสวัสดุ</th>
+            <th style="width: 12%;">เลขที่ใบเบิก</th>
+            <th style="width: 12%;">เลขที่ใบสั่งจ่าย</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${tableRowsHtml}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td colspan="4" style="text-align: center;">รวมเป็นเงิน</td>
+          </tr>
+        </tfoot>
+      </table>
+
+      <!-- 🟢 โครงสร้างตารางลายเซ็นที่ปรับแก้ไขแล้ว -->
+      <table class="signatures-table">
+        <tr>
+          <td style="padding-top: 25px;">ลงชื่อ..............................................</td>
+          <td style="padding-top: 25px;">ลงชื่อ..............................................</td>
+        </tr>
+        <tr>
+          <td>( ${esc(requesterName)} )</td>
+          <td>( ${esc(supplyHeadName)} )</td>
+        </tr>
+        <tr>
+          <td>ผู้ขอเบิก/ผู้รับของ</td>
+          <td>หัวหน้าหน่วยพัสดุ</td>
+        </tr>
+        <tr>
+          <td style="padding-top: 25px;">ลงชื่อ..............................................</td>
+          <!-- 🔴 ลบ <td> ฝั่งขวาออกแล้ว -->
+        </tr>
+        <tr>
+          <td>( ${esc(accountantName)} )</td>
+          <!-- 🔴 ลบ <td> ฝั่งขวาออกแล้ว -->
+        </tr>
+        <tr>
+          <td>ผู้ตัดบัญชีวัสดุ/ผู้จ่ายของ</td>
+          <!-- 🔴 ลบ <td> ฝั่งขวาออกแล้ว -->
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+
+  const htmlBlob = Utilities.newBlob(htmlContent, 'text/html', 'ใบเบิกวัสดุ.html');
+  const pdfBlob = htmlBlob.getAs('application/pdf');
+  pdfBlob.setName(`ใบเบิกวัสดุ_${String(docDate).replace(/\//g, '-')}.pdf`);
+
+  return pdfBlob;
+}
+
+/**
+ * 📦 ฟังก์ชันบันทึกข้อมูลลง MaterialRequests (A-L), ตัดสต็อก และส่งอีเมลตอบกลับ
+ */
+/**
+ * 📦 บันทึกข้อมูลลง MaterialRequests (A–M), ตัดสต็อก และส่งอีเมลตอบกลับ
+ *
+ * @param {Object} formData   ข้อมูลจากฟอร์ม
+ * @param {String} userEmail  อีเมลที่ได้จาก Firebase ID token (เชื่อถือได้เท่านั้น)
+ * @param {String} requestId  รหัสคำขอจากหน้าเว็บ ใช้กันบันทึกซ้ำเมื่อกดส่งซ้ำ/เน็ตหลุด
+ *
+ * จุดที่แก้จากเดิม:
+ *  1) รวมจำนวนของ "รายการเดียวกันที่เบิกซ้ำในใบเดียว" ก่อนเทียบสต็อก (เดิมตัดสต็อกได้ไม่ครบ)
+ *  2) กันบันทึกซ้ำด้วย requestId (เดิมกดส่งซ้ำ = บันทึก 2 ครั้ง + ตัดสต็อก 2 รอบ)
+ *  3) จับคู่วัสดุด้วย "รหัสวัสดุ" เป็นหลัก แล้วใช้ชื่อ/หน่วย/รหัสจาก MaterialMaster
+ *  4) ตรวจจำนวนเต็ม > 0, จำกัด 8 รายการ, และปฏิเสธถ้าไม่พบแผ่น MaterialMaster
+ *  5) ปล่อย lock ก่อนสร้าง PDF/ส่งอีเมล (เดิมล็อกไว้ทั้งก้อน คนที่สองรอจน timeout)
+ *  6) escape HTML ทุกค่าก่อนใส่ใน PDF/อีเมล
+ *  7) ส่งอีเมล 2 ฉบับ: ฉบับผู้เบิก (พร้อม PDF) และฉบับเจ้าหน้าที่ (สรุป + ลิงก์ชีต) แยกกันส่ง
+ */
+
+/**
+ * 📮 อีเมลฝั่งเจ้าหน้าที่/ผู้ดูแลระบบ ที่จะได้รับแจ้งเตือน "มีคำขอเบิกใหม่" เพิ่มเติม
+ * ค่าเริ่มต้น = อีเมลของบัญชีที่รันสคริปต์นี้ (เจ้าของเมลผู้ส่ง) ระบบดึงให้อัตโนมัติ
+ * ถ้าต้องการเพิ่มคนอื่น ใส่คั่นด้วยจุลภาค เช่น "head@buu.ac.th, stock@buu.ac.th"
+ * (หรือสร้างแผ่นงานชื่อ AdminNotify แล้วใส่คอลัมน์ A = อีเมล คอลัมน์ C = 0 เพื่อปิดรับ ก็ได้ ไม่ต้องแก้โค้ด)
+ */
+const ADMIN_NOTIFY_EMAILS = "";
+
+/** ระดับคงเหลือที่ถือว่า "ใกล้หมด" — ต่ำกว่าหรือเท่านี้จะขึ้นเตือนสีแดงในอีเมลฝั่งเจ้าหน้าที่ */
+const LOW_STOCK_WARNING_AT = 5;
+
+/**
+ * 📧 รวบรวมอีเมลผู้รับฝั่งเจ้าหน้าที่ (เจ้าของเมลผู้ส่ง + AdminNotify + ค่าคงที่ด้านบน)
+ * @param {String} excludeEmail อีเมลผู้เบิก — ตัดออกเพื่อไม่ให้คนเดียวกันได้ 2 ฉบับ
+ * @return {String[]} รายชื่ออีเมล (ตัวพิมพ์เล็ก ไม่ซ้ำ)
+ */
+function getAdminRecipients_(excludeEmail) {
+  const list = [];
+
+  function add(raw) {
+    if (raw === null || raw === undefined) return;
+    String(raw).split(/[,;\s]+/).forEach(function (one) {
+      const em = one.trim().toLowerCase();
+      if (em && em.indexOf("@") !== -1 && list.indexOf(em) === -1) list.push(em);
+    });
+  }
+
+  // 1) เจ้าของเมลผู้ส่ง — บัญชีที่รันสคริปต์นี้ คือบัญชีที่ใช้ส่งอีเมลจริง
+  try { add(Session.getEffectiveUser().getEmail()); } catch (e) { /* ไม่มีสิทธิ์อ่าน */ }
+  try { add(Session.getActiveUser().getEmail()); } catch (e) { /* ผู้ใช้ไม่ล็อกอิน Google */ }
+
+  // 2) แผ่นงาน AdminNotify (ถ้ามี) — เผื่อวันหลังต้องเพิ่มผู้รับโดยไม่แก้โค้ด
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const adminSheet = ss ? ss.getSheetByName("AdminNotify") : null;
+    if (adminSheet) {
+      const rows = adminSheet.getDataRange().getValues();
+      for (let i = 1; i < rows.length; i++) {
+        const flag = String(rows[i][2] === undefined || rows[i][2] === null ? "" : rows[i][2]).trim().toLowerCase();
+        if (flag === "0" || flag === "false" || flag === "ปิด") continue;
+        add(rows[i][0]);
+      }
+    }
+  } catch (e) { /* ไม่มีแผ่นงาน หรืออ่านไม่ได้ — ข้ามไป */ }
+
+  // 3) รายชื่อที่พิมพ์ไว้ในโค้ด
+  add(ADMIN_NOTIFY_EMAILS);
+
+  const ex = String(excludeEmail || "").toLowerCase().trim();
+  return list.filter(function (em) { return em !== ex; });
+}
+
+/** 🔗 ลิงก์เปิดไฟล์สเปรดชีต (ใช้ในอีเมลฝั่งเจ้าหน้าที่) */
+function getSheetUrl_() {
+  try {
+    return SpreadsheetApp.getActiveSpreadsheet().getUrl() || "";
+  } catch (e) {
+    return "";
+  }
+}
+
+/**
+ * 📝 สร้างเนื้ออีเมลแจ้งเตือนฝั่งเจ้าหน้าที่ — สรุปสั้น ตารางรายการ + คงเหลือหลังตัด + ลิงก์เปิดชีต
+ * (ไม่แนบ PDF เพื่อให้อีเมลเบา เปิดอ่านเร็ว)
+ */
+function buildAdminEmailHtml_(formData, normalizedItems, requesterName, requesterEmail, needByRow, formattedTimestamp) {
+  const stockByCode = {};
+  const rowKeys = Object.keys(needByRow);
+  for (let i = 0; i < rowKeys.length; i++) {
+    const need = needByRow[rowKeys[i]];
+    if (need && need.code) stockByCode[String(need.code)] = need.newStock;
+  }
+
+  let rowsHtml = "";
+  let lowStockHtml = "";
+  normalizedItems.forEach(function (item) {
+    const code = String(item.code || "");
+    const remain = (code && stockByCode[code] !== null && stockByCode[code] !== undefined) ? Number(stockByCode[code]) : null;
+    const isLow = (remain !== null && remain <= LOW_STOCK_WARNING_AT);
+    if (isLow) {
+      lowStockHtml += "<li><b>" + escapeHtml_(item.name) + "</b> เหลือ " +
+        escapeHtml_(remain) + " " + escapeHtml_(item.unit) + "</li>";
+    }
+    rowsHtml +=
+      '<tr>' +
+        '<td style="border:1px solid #ddd;padding:6px;text-align:center;">' + escapeHtml_(item.index) + '</td>' +
+        '<td style="border:1px solid #ddd;padding:6px;">' + escapeHtml_(item.code || "-") + '</td>' +
+        '<td style="border:1px solid #ddd;padding:6px;">' + escapeHtml_(item.name) + '</td>' +
+        '<td style="border:1px solid #ddd;padding:6px;text-align:center;">' + escapeHtml_(item.qty) + '</td>' +
+        '<td style="border:1px solid #ddd;padding:6px;text-align:center;">' + escapeHtml_(item.unit) + '</td>' +
+        '<td style="border:1px solid #ddd;padding:6px;text-align:center;font-weight:' + (isLow ? "bold" : "normal") +
+          ';color:' + (isLow ? "#dc3545" : "#198754") + ';">' + (remain === null ? "-" : escapeHtml_(remain)) + '</td>' +
+      '</tr>';
+  });
+
+  const sheetUrl = getSheetUrl_();
+  const lowStockBlock = lowStockHtml
+    ? '<div style="background:#fff3cd;border-left:4px solid #ffc107;padding:10px 14px;margin:16px 0;">' +
+        '<b>⚠️ วัสดุใกล้หมด (คงเหลือ ≤ ' + LOW_STOCK_WARNING_AT + ')</b><ul style="margin:8px 0 0 0;">' + lowStockHtml + '</ul></div>'
+    : "";
+
+  return '' +
+    '<div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">' +
+      '<h2 style="color: #dc3545;margin-bottom:4px;">🔔 มีคำขอเบิกวัสดุใหม่</h2>' +
+      '<p style="color:#777;margin-top:0;">บันทึกเข้าระบบเมื่อ ' + escapeHtml_(formattedTimestamp) + ' น.</p>' +
+      '<table style="border-collapse:collapse;margin-bottom:8px;">' +
+        '<tr><td style="padding:2px 10px 2px 0;"><b>ผู้ขอเบิก:</b></td><td>' + escapeHtml_(requesterName) +
+          ' (' + escapeHtml_(requesterEmail) + ')</td></tr>' +
+        '<tr><td style="padding:2px 10px 2px 0;"><b>หน่วยงาน:</b></td><td>' + escapeHtml_(formData.organization || "-") + '</td></tr>' +
+        '<tr><td style="padding:2px 10px 2px 0;"><b>วันที่ในเอกสาร:</b></td><td>' + escapeHtml_(formData.docDate || "-") + '</td></tr>' +
+        '<tr><td style="padding:2px 10px 2px 0;"><b>แหล่งเงิน:</b></td><td>' + escapeHtml_(formData.moneySource || "-") + '</td></tr>' +
+        '<tr><td style="padding:2px 10px 2px 0;"><b>จำนวนรายการ:</b></td><td>' + escapeHtml_(normalizedItems.length) + ' รายการ</td></tr>' +
+      '</table>' +
+      '<h3 style="color:#0d6efd;">รายการที่ขอเบิก (ตัดสต็อกแล้ว)</h3>' +
+      '<table style="border-collapse:collapse;width:100%;font-size:0.92em;">' +
+        '<thead><tr style="background:#0d6efd;color:#fff;">' +
+          '<th style="border:1px solid #ddd;padding:6px;">#</th>' +
+          '<th style="border:1px solid #ddd;padding:6px;">รหัส</th>' +
+          '<th style="border:1px solid #ddd;padding:6px;">รายการ</th>' +
+          '<th style="border:1px solid #ddd;padding:6px;">เบิก</th>' +
+          '<th style="border:1px solid #ddd;padding:6px;">หน่วย</th>' +
+          '<th style="border:1px solid #ddd;padding:6px;">คงเหลือ</th>' +
+        '</tr></thead>' +
+        '<tbody>' + rowsHtml + '</tbody>' +
+      '</table>' +
+      lowStockBlock +
+      (sheetUrl
+        ? '<p style="margin-top:18px;"><a href="' + sheetUrl + '" style="background:#0d6efd;color:#fff;padding:10px 18px;text-decoration:none;border-radius:4px;">📊 เปิดไฟล์บันทึกการเบิก</a></p>'
+        : '') +
+      '<hr style="border: 0; border-top: 1px solid #ccc;margin-top:20px;" />' +
+      '<p style="font-size:0.85em;color:#777;">ข้อความนี้เป็นข้อความส่งอัตโนมัติจากระบบเบิกวัสดุ — กด "ตอบกลับ" เพื่อตอบกลับถึงผู้ขอเบิกได้ทันที</p>' +
+    '</div>';
+}
+
+function saveData(formData, userEmail, requestId) {
+  const MAX_ITEMS = 8;
+  const lock = LockService.getScriptLock();
+  let lockHeld = false;
+
+  function releaseLockOnce() {
+    if (!lockHeld) return;
+    lockHeld = false;
+    try { lock.releaseLock(); } catch (e) { /* ปล่อยไปแล้ว */ }
+  }
+
+  try {
+    lock.waitLock(20000);
+    lockHeld = true;
+
+    if (!formData) return { success: false, message: "ไม่พบข้อมูลฟอร์มที่ส่งมา" };
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName("MaterialRequests");
+
+    // หากยังไม่มี Sheet ให้สร้างพร้อม Header 13 คอลัมน์ (เพิ่ม Request ID ไว้กันบันทึกซ้ำ)
+    if (!sheet) {
+      sheet = ss.insertSheet("MaterialRequests");
+      sheet.appendRow([
+        "ลำดับที่", "รายการ", "จำนวน", "หน่วยนับ", "รหัสวัสดุ",
+        "เลขใบเบิก", "เลขที่ใบสั่งจ่าย", "ผู้ขอเบิก", "วันที่", "เวลาที่บันทึก",
+        "Email ผู้เบิก", "Raw JSON", "Request ID"
+      ]);
+    } else if (!String(sheet.getRange(1, 13).getValue() || "").trim()) {
+      sheet.getRange(1, 13).setValue("Request ID"); // ชีตเดิมยังไม่มีหัวคอลัมน์ M
+    }
+
+    // 0. กันบันทึกซ้ำ: requestId นี้เคยบันทึกแล้ว → ตอบกลับทันที ไม่ตัดสต็อกซ้ำ
+    const cleanRequestId = requestId ? String(requestId).trim() : "";
+    if (cleanRequestId) {
+      const lastRow0 = sheet.getLastRow();
+      if (lastRow0 > 1) {
+        const ids = sheet.getRange(2, 13, lastRow0 - 1, 1).getValues();
+        for (let i = 0; i < ids.length; i++) {
+          if (String(ids[i][0] || "").trim() === cleanRequestId) {
+            return {
+              success: true,
+              duplicate: true,
+              message: "รายการนี้เคยบันทึกเข้าระบบแล้ว (ระบบไม่ตัดสต็อกซ้ำ) หากต้องการเบิกเพิ่มกรุณาสร้างใบใหม่"
+            };
+          }
+        }
+      }
+    }
+
+    const timestamp = new Date();
+    const formattedTimestamp = Utilities.formatDate(timestamp, "Asia/Bangkok", "yyyy-MM-dd HH:mm:ss");
+    const displayDocDate = formData.docDate ? "'" + formData.docDate : "-";
+    const cleanEmail = userEmail ? String(userEmail).toLowerCase().trim() : "";
+    const requesterName = formData.requesterName || "ผู้ขอเบิก";
+    const jsonString = JSON.stringify(formData);
+
+    if (!Array.isArray(formData.items) || formData.items.length === 0) {
+      return { success: false, message: "ไม่พบรายการวัสดุในใบเบิกฉบับนี้" };
+    }
+    if (formData.items.length > MAX_ITEMS) {
+      return {
+        success: false,
+        message: "ระบบจำกัดการเบิกไม่เกิน " + MAX_ITEMS + " รายการต่อ 1 ใบเบิก (ได้รับ " + formData.items.length + " รายการ)"
+      };
+    }
+
+    // 1. ตรวจสต็อก "ก่อน" บันทึกอะไรทั้งสิ้น
+    const masterSheet = ss.getSheetByName("MaterialMaster");
+    if (!masterSheet) {
+      return {
+        success: false,
+        message: "ไม่พบแผ่นงาน MaterialMaster จึงตรวจสต็อกไม่ได้ ระบบไม่อนุญาตให้บันทึกโดยไม่ตัดสต็อก"
+      };
+    }
+
+    const masterData = masterSheet.getDataRange().getValues();
+    const needByRow = {};        // เลขแถวใน MaterialMaster → ยอดขอเบิกรวม (รวมรายการซ้ำแล้ว)
+    const normalizedItems = [];  // รายการที่จะบันทึกจริง (ใช้ค่าจาก MaterialMaster)
+
+    for (let n = 0; n < formData.items.length; n++) {
+      const item = formData.items[n] || {};
+      const matCode = (item.code && String(item.code).trim() !== "-") ? String(item.code).trim() : "";
+      const matName = item.name ? String(item.name).trim() : "";
+      const label = matName || matCode || ("รายการที่ " + (n + 1));
+      const qtyToDeduct = Number(item.qty);
+
+      if (!isFinite(qtyToDeduct) || qtyToDeduct <= 0 || Math.floor(qtyToDeduct) !== qtyToDeduct) {
+        return { success: false, message: "จำนวนเบิกของ \"" + label + "\" ต้องเป็นจำนวนเต็มมากกว่า 0" };
+      }
+
+      // จับคู่ด้วย "รหัสวัสดุ" ก่อน (รหัสคือคีย์หลัก) ถ้าไม่มีรหัสจึงจับคู่ด้วยชื่อ
+      let foundAt = -1;
+      if (matCode) {
+        for (let i = 1; i < masterData.length; i++) {
+          if (String(masterData[i][0] || "").trim() === matCode) { foundAt = i; break; }
+        }
+      }
+      if (foundAt < 0 && matName) {
+        for (let i = 1; i < masterData.length; i++) {
+          if (String(masterData[i][1] || "").trim() === matName) { foundAt = i; break; }
+        }
+      }
+      if (foundAt < 0) {
+        return {
+          success: false,
+          message: "ไม่พบวัสดุ \"" + label + "\" (รหัส " + (matCode || "-") + ") ในแผ่นงาน MaterialMaster กรุณาแจ้งผู้ดูแลระบบ"
+        };
+      }
+
+      // ใช้ชื่อ/หน่วย/รหัสจาก MaterialMaster เป็นหลัก กันข้อมูลที่ส่งมาไม่ตรงกับทะเบียน
+      const officialCode = String(masterData[foundAt][0] || "").trim() || matCode || "-";
+      const officialName = String(masterData[foundAt][1] || "").trim() || matName || "-";
+      const officialUnit = String(masterData[foundAt][6] || "").trim() || String(item.unit || "-").trim();
+
+      normalizedItems.push({
+        index: n + 1,
+        name: officialName,
+        qty: qtyToDeduct,
+        unit: officialUnit,
+        code: officialCode,
+        reqNo: item.reqNo || "-",
+        payNo: item.payNo || "-"
+      });
+
+      if (!needByRow[foundAt]) needByRow[foundAt] = { qty: 0, label: officialName, code: officialCode, newStock: null };
+      needByRow[foundAt].qty += qtyToDeduct;
+    }
+
+    // เทียบ "ยอดรวมต่อวัสดุ" กับคงเหลือ — รายการเดียวกันที่เบิกซ้ำจะถูกรวมก่อน จึงไม่หลุด
+    const deductions = [];
+    const rowKeys = Object.keys(needByRow);
+    for (let k = 0; k < rowKeys.length; k++) {
+      const at = Number(rowKeys[k]);
+      const need = needByRow[rowKeys[k]];
+      const currentStock = (masterData[at][7] !== "" && !isNaN(masterData[at][7])) ? Number(masterData[at][7]) : 0;
+
+      if (need.qty > currentStock) {
+        return {
+          success: false,
+          message: "วัสดุ \"" + need.label + "\" คงเหลือเพียง " + currentStock +
+                   " ไม่พอสำหรับจำนวนที่ขอเบิก " + need.qty
+        };
+      }
+      need.newStock = currentStock - need.qty;   // ใช้แสดง "คงเหลือหลังตัด" ในอีเมลแจ้งเตือนฝั่งเจ้าหน้าที่
+      deductions.push({ row: at + 1, newStock: currentStock - need.qty });
+    }
+
+    // 2. บันทึกลง MaterialRequests (คอลัมน์ A–M) — ถึงตรงนี้คือตรวจผ่านทั้งหมดแล้ว
+    normalizedItems.forEach(function (item, idx) {
+      sheet.appendRow([
+        item.index || (idx + 1),
+        item.name || "-",
+        item.qty || 0,
+        item.unit || "-",
+        item.code || "-",
+        item.reqNo || "-",
+        item.payNo || "-",
+        requesterName,
+        displayDocDate,
+        formattedTimestamp,
+        cleanEmail,
+        jsonString,
+        cleanRequestId
+      ]);
+    });
+
+    // 3. ตัดสต็อกจริง (ทุกรายการตรวจผ่านแล้ว จึงไม่ติดลบ)
+    deductions.forEach(function (d) {
+      masterSheet.getRange(d.row, 8).setValue(d.newStock);
+    });
+
+    // 4. ปล่อย lock ก่อนงานหนัก (สร้าง PDF + ส่งอีเมล) เพื่อไม่ให้ผู้ใช้คนอื่นรอคิวจน timeout
+    releaseLockOnce();
+
+    // 5. ส่งอีเมล 2 ฉบับ — แยก try คนละก้อน ฝั่งหนึ่งล้มจะไม่ลากอีกฝั่งล้มไปด้วย
+    let emailStatus = "ไม่ได้ส่งอีเมล (ไม่พบปลายทาง)";
+    let adminStatus = "ไม่ได้ส่งอีเมลแจ้งเตือนฝั่งเจ้าหน้าที่";
+
+    // 5.1 สร้างไฟล์ PDF ครั้งเดียว ใช้เฉพาะฉบับผู้เบิก (สร้างไม่สำเร็จยังส่งอีเมลได้ เพียงไม่มีไฟล์แนบ)
+    let pdfAttachment = null;
+    try {
+      pdfAttachment = generatePdfBlob(Object.assign({}, formData, {
+        items: normalizedItems,
+        requesterName: requesterName
+      }));
+    } catch (pdfErr) {
+      console.error("สร้างไฟล์ PDF ไม่สำเร็จ:", pdfErr.toString());
+    }
+
+    let itemListHtml = "";
+    normalizedItems.forEach(function (item) {
+      itemListHtml += `<li><b>${escapeHtml_(item.name)}</b> จำนวน ${escapeHtml_(item.qty)} ${escapeHtml_(item.unit)} (รหัส: ${escapeHtml_(item.code || "-")})</li>`;
+    });
+
+    // 5.2 ฉบับที่ 1 → ผู้ขอเบิก (ยืนยัน + ไฟล์ใบเบิก PDF)
+    if (cleanEmail && cleanEmail.indexOf("@") !== -1) {
+      try {
+        const subject = `[ระบบเบิกวัสดุ] ยืนยันการรับใบเบิกวัสดุ วันที่ ${formData.docDate || ""}`;
+
+        const htmlBody = `
+          <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <h2 style="color: #0d6efd;">บันทึกใบเบิกวัสดุสำเร็จ</h2>
+            <p>เรียนคุณ <b>${escapeHtml_(requesterName)}</b>,</p>
+            <p>ระบบได้ทำการบันทึกข้อมูลการขอเบิกวัสดุของคุณเรียบร้อยแล้ว โดยมีรายละเอียดดังนี้:</p>
+            <ul>
+              <li><b>หน่วยงาน:</b> ${escapeHtml_(formData.organization || "-")}</li>
+              <li><b>วันที่ในเอกสาร:</b> ${escapeHtml_(formData.docDate || "-")}</li>
+              <li><b>แหล่งเงิน:</b> ${escapeHtml_(formData.moneySource || "-")}</li>
+            </ul>
+            <h3 style="color: #0d6efd;">รายการวัสดุที่ขอเบิก:</h3>
+            <ul>${itemListHtml}</ul>
+            <p style="color: #198754;"><b>📎 ไฟล์ใบเบิกวัสดุรูปแบบ PDF ได้ถูกแนบมาพร้อมกับอีเมลฉบับนี้แล้ว</b></p>
+            <hr style="border: 0; border-top: 1px solid #ccc;" />
+            <p style="font-size: 0.85em; color: #777;">ข้อความนี้เป็นข้อความส่งอัตโนมัติจากระบบเบิกวัสดุ</p>
+          </div>
+        `;
+
+        const requesterOptions = {
+          htmlBody: htmlBody,
+          name: "ระบบเบิกวัสดุคณะเภสัชศาสตร์"
+        };
+        if (pdfAttachment) requesterOptions.attachments = [pdfAttachment];
+
+        GmailApp.sendEmail(cleanEmail, subject, "", requesterOptions);
+
+        emailStatus = pdfAttachment
+          ? "ส่งอีเมลสำเร็จพร้อมแนบไฟล์ PDF ไปยัง " + cleanEmail
+          : "ส่งอีเมลสำเร็จแต่สร้างไฟล์ PDF ไม่สำเร็จ (ไม่ได้แนบไฟล์) ไปยัง " + cleanEmail;
+      } catch (emailErr) {
+        console.error("เกิดข้อผิดพลาดในการส่งอีเมลถึงผู้เบิก:", emailErr.toString());
+        emailStatus = "ส่งอีเมลไม่สำเร็จ: " + emailErr.toString();
+      }
+    }
+
+    // 5.3 ฉบับที่ 2 → เจ้าของเมลผู้ส่ง/เจ้าหน้าที่ (สรุป + คงเหลือหลังตัด + ลิงก์เปิดชีต ไม่แนบไฟล์)
+    const adminRecipients = getAdminRecipients_(cleanEmail);
+    if (adminRecipients.length > 0) {
+      try {
+        const adminSubject = "[เบิกใหม่] " + requesterName + " — " + normalizedItems.length +
+                             " รายการ — " + (formData.docDate || "-");
+        const adminOptions = {
+          htmlBody: buildAdminEmailHtml_(formData, normalizedItems, requesterName, cleanEmail, needByRow, formattedTimestamp),
+          name: "ระบบเบิกวัสดุคณะเภสัชศาสตร์"
+        };
+        if (cleanEmail && cleanEmail.indexOf("@") !== -1) adminOptions.replyTo = cleanEmail;
+
+        GmailApp.sendEmail(adminRecipients.join(","), adminSubject, "", adminOptions);
+        adminStatus = "ส่งอีเมลแจ้งเตือนฝั่งเจ้าหน้าที่ไปยัง " + adminRecipients.join(", ");
+      } catch (adminErr) {
+        console.error("ส่งอีเมลแจ้งเตือนฝั่งเจ้าหน้าที่ไม่สำเร็จ:", adminErr.toString());
+        adminStatus = "ส่งอีเมลแจ้งเตือนฝั่งเจ้าหน้าที่ไม่สำเร็จ: " + adminErr.toString();
+      }
+    } else {
+      adminStatus = "ไม่มีอีเมลฝั่งเจ้าหน้าที่ให้ส่ง (ไม่พบบัญชีผู้ส่ง หรือเป็นอีเมลเดียวกับผู้เบิก)";
+    }
+
+    const mockDocId = "51" + String(timestamp.getTime()).slice(-4);
+    return {
+      success: true,
+      duplicate: false,
+      docId: mockDocId,
+      emailStatus: emailStatus,
+      adminStatus: adminStatus,
+      message: "บันทึกข้อมูลเรียบร้อยแล้ว!"
+    };
+
+  } catch (error) {
+    return { success: false, message: "เกิดข้อผิดพลาด: " + error.toString() };
+  } finally {
+    releaseLockOnce();
+  }
+}
+
+/**
+ * 📋 ดึงรายชื่อวัสดุทั้งหมดจาก MaterialMaster
+ */
+function getMaterialList(idToken) {
+  try {
+    // 🔒 รายการวัสดุแนบ "คงเหลือ" มาด้วย จึงไม่เปิดให้ดึงโดยไม่ล็อกอิน
+    if (REQUIRE_AUTH_FOR_MATERIALS) {
+      const authCheck = verifyIdToken(idToken);
+      if (!authCheck.ok) {
+        return { success: false, message: "ต้องเข้าสู่ระบบก่อนจึงจะดูรายการวัสดุได้ — " + authCheck.error };
+      }
+    }
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName("MaterialMaster");
+    if (!sheet) return { success: false, message: "ไม่พบแผ่นงาน MaterialMaster" };
+    
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return { success: true, data: [] };
+    
+    const range = sheet.getRange(2, 1, lastRow - 1, 8);
+    const values = range.getValues();
+    const materials = [];
+    
+    values.forEach(function(row) {
+      const code = row[0] ? String(row[0]).trim() : "";
+      const name = row[1] ? String(row[1]).trim() : "";
+      const unit = row[6] ? String(row[6]).trim() : "";
+      const stock = row[7] !== "" && !isNaN(row[7]) ? Number(row[7]) : 0;
+      
+      if (name && name !== "undefined" && name !== "") {
+        materials.push({ code: code, name: name, unit: unit, stock: stock });
+      }
+    });
+    
+    return { success: true, data: materials };
+  } catch (e) {
+    return { success: false, message: e.toString() };
+  }
+}
+
+/**
+ * 🩺 นับแถวใน MaterialRequests เทียบกับอีเมลของผู้เรียก (อ่านอย่างเดียว ไม่แก้ข้อมูล)
+ * ใช้แยกชัดว่า “ยังไม่เคยบันทึก” หรือ “บันทึกแล้วแต่คอลัมน์ K ไม่ตรงอีเมล”
+ */
+function diagnoseHistory(userEmail) {
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("MaterialRequests");
+    if (!sheet) return { success: false, message: "ไม่พบแผ่นงาน MaterialRequests" };
+
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) {
+      return { success: true, totalRows: 0, myRows: 0, rowsWithoutEmail: 0, checkedEmail: String(userEmail || "").toLowerCase().trim() };
+    }
+
+    const values = sheet.getRange(2, 1, lastRow - 1, 12).getValues();
+    const cleanEmail = String(userEmail || "").toLowerCase().trim();
+    let myRows = 0;
+    let rowsWithoutEmail = 0;
+
+    values.forEach(function(row) {
+      const rowEmail = String(row[10] || "").toLowerCase().trim();
+      if (!rowEmail) rowsWithoutEmail += 1;
+      if (rowEmail && rowEmail === cleanEmail) myRows += 1;
+    });
+
+    return {
+      success: true,
+      totalRows: values.length,
+      myRows: myRows,
+      rowsWithoutEmail: rowsWithoutEmail,
+      checkedEmail: cleanEmail
+    };
+  } catch (e) {
+    return { success: false, message: e.toString() };
+  }
+}
+
+/**
+ * 📜 ดึงประวัติการเบิกย้อนหลังเฉพาะของผู้ใช้งานที่ร้องขอ (Strict Email Filter)
+ */
+function getUserHistory(userEmail) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName("MaterialRequests");
+
+    if (!sheet) return { success: true, data: [] };
+
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return { success: true, data: [] };
+
+    const cleanEmail = userEmail ? String(userEmail).toLowerCase().trim() : "";
+    if (!cleanEmail) return { success: true, data: [] }; // หากไม่อยู่ในระบบ ล็อกอิน ป้องกันการดึงข้อมูล
+
+    const values = sheet.getRange(2, 1, lastRow - 1, 13).getValues();
+
+    // 🔒 1. กรองเฉพาะแถวที่มี Email ใน คอลัมน์ K (Index 10) ตรงกับผู้ใช้งานเท่านั้น
+    const matchedRows = values.filter(function(row) {
+      const rowEmail = String(row[10] || "").toLowerCase().trim();
+      return rowEmail === cleanEmail;
+    });
+
+    // 🔒 2. หากไม่พบประวัติ ให้ส่งอาร์เรย์ว่างกลับไป (ห้ามส่งข้อมูลคนอื่นเด็ดขาด)
+    if (matchedRows.length === 0) {
+      return { success: true, data: [] };
+    }
+
+    const historyMap = {};
+
+    matchedRows.forEach(function(row) {
+      const docDate = row[8] ? String(row[8]).replace("'", "").trim() : "-";
+      let saveTime = "-";
+      let keyTime = "";
+
+      if (row[9]) {
+        try {
+          saveTime = Utilities.formatDate(new Date(row[9]), "Asia/Bangkok", "dd/MM/yyyy HH:mm");
+          // ใช้คีย์ที่ละเอียดถึงวินาที ไม่งั้น 2 ใบที่บันทึกในนาทีเดียวกันจะถูกยุบรวมเป็นใบเดียว
+          keyTime = Utilities.formatDate(new Date(row[9]), "Asia/Bangkok", "yyyy-MM-dd HH:mm:ss");
+        } catch(e) {
+          saveTime = String(row[9]).trim();
+          keyTime = saveTime;
+        }
+      }
+
+      const rawJsonData = row[11] || null; // คอลัมน์ L (Index 11) เก็บ Raw JSON
+      const requestId = String(row[12] || "").trim(); // คอลัมน์ M (Index 12)
+      const key = (requestId || keyTime || saveTime) + "|" + docDate;
+
+      if (!historyMap[key]) {
+        historyMap[key] = {
+          saveTime: saveTime,
+          docDate: docDate,
+          itemCount: 0,
+          rawJson: rawJsonData,
+          userEmail: cleanEmail
+        };
+      }
+      historyMap[key].itemCount += 1;
+    });
+
+    const historyList = Object.keys(historyMap).map(key => historyMap[key]);
+    historyList.reverse(); // เรียงจากรายการล่าสุดขึ้นก่อน
+
+    return { success: true, data: historyList };
+
+  } catch (error) {
+    return { success: false, message: error.toString() };
+  }
+}

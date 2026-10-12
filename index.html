@@ -7,29 +7,29 @@
     <!-- Google Fonts Prompt -->
     <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- นำเข้าไฟล์ สไตล์ CSS -->
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=3.1">
     <!-- นำเข้า html2pdf.js สำหรับแปลงหน้า HTML เป็น PDF -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
 
     <!-- 📌 แถบเมนูหลักด้านบน (Navbar) -->
-    <div class="navbar no-print" style="width: 100%; background-color: #ffffff; border-bottom: 3px solid #f1c40f; padding: 12px 0;">
+    <div class="navbar no-print" style="width: 100%; padding: 14px 0;">
         <div class="navbar-container" style="display: flex; justify-content: space-between; align-items: center; max-width: 1100px; margin: 0 auto; padding: 0 20px;">
             
             <!-- 🔹 โลโก้และชื่อระบบ (มุมซ้าย) -->
             <div style="display: flex; align-items: center; gap: 10px;">
-                <span style="font-size: 1.5rem;">💊</span>
-                <strong style="font-size: 1.1rem; color: #2c3e50;">RxBUU Material System </strong>
+                <span style="font-size: 1.5rem; filter: drop-shadow(0 3px 6px rgba(0,0,0,.22));">💊</span>
+                <strong style="font-size: 1.1rem; color: #FFFFFF;">RxBUU Material System </strong>
             </div>
             
             <!-- 🔹 ส่วนขวา: ปุ่มประวัติย้อนหลัง & ชื่อระบบ -->
             <div style="display: flex; align-items: center; gap: 15px;">
                 <!-- 🟢 ปรับเปลี่ยน display: none เป็น display: inline-block เพื่อให้ปุ่มแสดงผล -->
-                <button type="button" id="btnNavHistory" class="btn-history-nav" onclick="openHistoryModal()" style="display: inline-block; padding: 6px 14px; background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; border-radius: 20px; font-size: 0.85rem; font-weight: 500; cursor: pointer; transition: 0.2s;">
+                <button type="button" id="btnNavHistory" class="btn-history-nav rx-nav-pill" onclick="openHistoryModal()">
                     📜 ประวัติการเบิก
                 </button>
-                <div style="font-size: 0.9rem; color: #7f8c8d; font-weight: 500;">
+                <div style="font-size: 0.9rem; color: rgba(255,255,255,.88); font-weight: 500;">
                     RxBUU . Firebase Edition
                 </div>
             </div>
@@ -41,10 +41,10 @@
     <div class="app-container">
 
         <!-- 🔑 1. ส่วนเข้าสู่ระบบ (Login Section) -->
-        <div id="loginSection" class="card" style="max-width: 450px; margin: 40px auto; text-align: center; padding: 40px 20px;">
-            <div style="font-size: 3rem; margin-bottom: 10px;">🔐</div>
-            <h2 style="margin-bottom: 8px; color: #2c3e50;">เข้าสู่ระบบเบิกวัสดุสำนักงาน</h2>
-            <p style="color: #7f8c8d; font-size: 0.9rem; margin-bottom: 25px;">
+        <div id="loginSection" class="card" style="max-width: 480px; margin: 40px auto; text-align: center; padding: 46px 24px;">
+            <div style="width: 88px; height: 88px; margin: 0 auto 16px; display: grid; place-items: center; font-size: 2.5rem; border-radius: 50%; background: radial-gradient(circle at 32% 26%, #FFFFFF 0%, #D9F7EC 45%, #A8ECD6 100%); box-shadow: 0 18px 32px -20px rgba(15,191,148,.95);">💊</div>
+            <h2 style="margin-bottom: 8px; color: #0B6B54;">เข้าสู่ระบบเบิกวัสดุสำนักงาน</h2>
+            <p style="color: #4B6B64; font-size: 0.9rem; margin-bottom: 25px;">
                 กรุณาเข้าสู่ระบบด้วย Google Account เพื่อยืนยันตัวตนก่อนเข้าใช้งานระบบ
             </p>
             
@@ -53,8 +53,8 @@
                 เข้าใช้งานด้วย Google
             </button>
             
-            <div id="loginStatus" style="margin-top: 15px; font-size: 0.85rem; color: #e67e22; font-weight: 500;"></div>
-            <div id="authAlert" style="display: none; margin-top: 15px; padding: 10px; background-color: #fce4e4; border: 1px solid #f9b2b2; border-radius: 6px; color: #c0392b; font-size: 0.85rem;"></div>
+            <div id="loginStatus" style="margin-top: 15px; font-size: 0.85rem; color: #0B8F70; font-weight: 500;"></div>
+            <div id="authAlert" style="display: none; margin-top: 15px; padding: 12px; background-color: #FFF1F2; border: 1px solid #FFD0D4; border-radius: 12px; color: #B4272C; font-size: 0.85rem;"></div>
         </div>
 
         <!-- 📝 2. ส่วนฟอร์มบันทึกข้อมูล (Form Section - จะโหลด form.html มาแทรก) -->
@@ -72,17 +72,20 @@
     <!-- ⏳ 1. หน้าต่างแสดงการกำลังส่งข้อมูล (Loading Overlay) -->
     <div id="loadingOverlay" class="loading-overlay hidden">
         <div class="spinner"></div>
-        <div style="margin-top: 15px; font-weight: 500; color: #2c3e50;">กำลังบันทึกข้อมูล กรุณารอสักครู่...</div>
+        <div style="margin-top: 15px; font-weight: 500; color: #0B6B54;">กำลังบันทึกข้อมูล กรุณารอสักครู่...</div>
     </div>
 
     <!-- ✨ 2. หน้าต่างแจ้งเตือนบันทึกสำเร็จ -->
     <div id="successPopup" class="popup-hidden hidden">
         <div class="popup-card" style="text-align: center; padding: 30px; background: white; border-radius: 16px; max-width: 380px; margin: auto;">
             <div style="font-size: 2rem; margin-bottom: 10px;">✨</div>
-            <h3 style="margin-bottom: 20px; color: #2c3e50; font-size: 1.3rem;">บันทึกข้อมูลเรียบร้อย!</h3>
+            <h3 style="margin-bottom: 12px; color: #0B8F70; font-size: 1.3rem;">บันทึกข้อมูลเรียบร้อย!</h3>
+
+            <!-- 🟢 แสดงผลการส่งอีเมล / กรณีบันทึกซ้ำ (เดิมไม่แจ้งอะไรเลย) -->
+            <div id="successNote" style="margin-bottom: 18px; font-size: 0.85rem; line-height: 1.5; white-space: pre-line; color: #0B8F70;"></div>
             
-            <button type="button" class="btn-primary" onclick="closePopupAndGoToPrint()" 
-                    style="width: 100%; padding: 12px; background-color: #d4edda; color: #155724; border: none; border-radius: 8px; font-weight: 600; font-size: 0.95rem; cursor: pointer; transition: 0.2s;">
+            <button type="button" class="btn-primary" onclick="closePopupAndGoToPrint()"
+                    style="width: 100%; padding: 12px; justify-content: center; border-radius: 999px; font-weight: 600; font-size: 0.95rem;">
                 เปิดหน้าพรีวิวเพื่อสั่งพิมพ์
             </button>
         </div>
@@ -107,7 +110,7 @@
                     </thead>
                     <tbody id="historyTableBody">
                         <tr>
-                            <td colspan="4" style="text-align: center; color: #777;">กำลังโหลดข้อมูล...</td>
+                            <td colspan="4" style="text-align: center; color: #6B8B83;">กำลังโหลดข้อมูล...</td>
                         </tr>
                     </tbody>
                 </table>
@@ -117,8 +120,8 @@
 
     <!-- 📁 4. หน้าต่าง Drive Modal สำหรับดูรูปภาพรายการวัสดุ -->
     <div id="driveModal" class="no-print" style="display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); align-items: center; justify-content: center;">
-        <div style="background: white; width: 85%; height: 85%; border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.3);">
-            <div style="padding: 12px 20px; background: #2c3e50; color: white; display: flex; justify-content: space-between; align-items: center;">
+        <div style="background: white; width: 85%; height: 85%; border-radius: 20px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.3);">
+            <div style="padding: 12px 20px; background: linear-gradient(120deg, #0B8F70, #0FBF94 60%, #2EC5D3); color: white; display: flex; justify-content: space-between; align-items: center;">
                 <span style="font-weight: 500;">📁 สมุดภาพรายการวัสดุสำนักงาน</span>
                 <button type="button" onclick="closeDriveModal()" style="background: none; border: none; color: white; font-size: 1.2rem; cursor: pointer;">✕</button>
             </div>
@@ -127,7 +130,22 @@
     </div>
 
     <!-- ⚙️ ลิงก์เชื่อมโยงไปยังไฟล์ script.js (แบบ ES Module สำหรับ Firebase) -->
-    <script type="module" src="script.js"></script>
+    <script type="module" src="script.js?v=20261008-3"></script>
+
+    <!-- ⚠️ สำรอง: ถ้า script.js โหลดไม่สำเร็จ (เครือข่ายช้า / gstatic ถูกบล็อก)
+         ปุ่มล็อกอินจะ "ตายเงียบ" กดแล้วไม่มีอะไรเกิดขึ้น โดยเฉพาะบนมือถือ
+         จึงแจ้งเตือนผู้ใช้แทนการปล่อยให้งง -->
+    <script>
+        (function () {
+            setTimeout(function () {
+                if (window.__rxModuleReady) return;
+                var status = document.getElementById('loginStatus');
+                if (status) {
+                    status.innerHTML = '<span style="color:#C43D3D;">⚠️ ระบบยังโหลดไม่สำเร็จ (เครือข่ายช้าหรือส่วนขยายถูกบล็อก)<br>กรุณากดปุ่มล็อกอินอีกครั้ง หรือปิดหน้านี้แล้วเปิดใหม่</span>';
+                }
+            }, 6000);
+        })();
+    </script>
 
 </body>
 </html>

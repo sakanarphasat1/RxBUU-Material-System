@@ -1,15 +1,30 @@
 <div class="card">
     <div class="card-header" style="margin-bottom: 20px;">
-        <h2 style="color: #003366; font-size: 1.5rem; margin-bottom: 5px;">📝 สร้างใบเบิกวัสดุสำนักงาน</h2>
-        <p style="color: #666; font-size: 0.9rem;">กรุณากรอกข้อมูลและรายการวัสดุที่ต้องการขอเบิก</p>
+        <h2 style="font-size: 1.5rem; margin-bottom: 5px;">📝 สร้างใบเบิกวัสดุสำนักงาน</h2>
+        <p style="color: #666; font-size: 0.9rem; margin-bottom: 12px;">กรุณากรอกข้อมูลและรายการวัสดุที่ต้องการขอเบิก
+        </p>
+
+        <!-- 📢 กล่องหมายเหตุวันเวลารับวัสดุ -->
+        <div
+            style="background: linear-gradient(120deg, #EAFDF5 0%, #E6F6FF 100%); border-left: 5px solid #0FBF94; padding: 12px 16px; border-radius: 14px; font-size: 0.88rem; color: #0B6B54; display: flex; align-items: center; gap: 8px; box-shadow: 0 10px 20px -18px rgba(11,143,112,.9);">
+            <span style="font-size: 1.1rem;">📅</span>
+            <span>
+                <strong>หมายเหตุ:</strong> สามารถบันทึกและพิมพ์ใบเบิกวัสดุได้ทุกวัน
+                แต่สามารถนำใบมาขอเบิกรับวัสดุได้เฉพาะ
+                <strong
+                    style="color: #A13D6B; background-color: #FFEEF7; padding: 3px 9px; border-radius: 999px; border: 1px solid #FFD3E6;">วันจันทร์,
+                    พุธ และศุกร์</strong> เท่านั้น
+            </span>
+        </div>
     </div>
-    
+
     <form id="materialForm" onsubmit="event.preventDefault();">
         <!-- 📌 ส่วนที่ 1: ข้อมูลทั่วไป/ส่วนหัว -->
         <div class="form-grid">
             <div class="form-group">
                 <label for="organization">หน่วยงาน</label>
-                <input type="text" id="organization" name="organization" required value="คณะเภสัชศาสตร์" readonly style="background-color: #F2F4F4; color: #7F8C8D; cursor: not-allowed;">
+                <input type="text" id="organization" name="organization" required value="คณะเภสัชศาสตร์" readonly
+                    style="background-color: #F0F7F4; color: #64857D; cursor: not-allowed;">
             </div>
             <div class="form-group">
                 <label for="docDate">วันที่ <span class="required">*</span></label>
@@ -17,13 +32,16 @@
             </div>
             <div class="form-group">
                 <label for="moneySource">แหล่งเงิน</label>
-                <input type="text" id="moneySource" name="moneySource" required value="รายได้ คณะเภสัชศาสตร์ มหาวิทยาลัยบูรพา" readonly style="background-color: #F2F4F4; color: #7F8C8D; cursor: not-allowed;">
+                <input type="text" id="moneySource" name="moneySource" required
+                    value="รายได้ คณะเภสัชศาสตร์ มหาวิทยาลัยบูรพา" readonly
+                    style="background-color: #F0F7F4; color: #64857D; cursor: not-allowed;">
             </div>
         </div>
 
         <!-- 📌 ส่วนที่ 2: ตารางรายการวัสดุ -->
         <div class="table-container-form" style="margin-top: 30px; overflow-x: auto;">
-            <label style="font-weight: 500; margin-bottom: 10px; display: block; color: #2C3E50;">📦 รายการวัสดุสำนักงานที่ต้องการเบิก</label>
+            <label style="font-weight: 500; margin-bottom: 10px; display: block; color: #2C3E50;">📦
+                รายการวัสดุสำนักงานที่ต้องการเบิก</label>
             <table id="inputItemsTable" class="input-items-table">
                 <thead>
                     <tr>
@@ -41,71 +59,81 @@
                     <tr>
                         <td class="row-index" style="text-align: center;">1</td>
                         <td>
-                            <select class="item-name" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #BDC3C7;" required onchange="onMaterialChange(this)">
+                            <select class="item-name"
+                                style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #BDC3C7;"
+                                required onchange="onMaterialChange(this)">
                                 <option value="">-- กำลังโหลดรายการวัสดุ... --</option>
                             </select>
                         </td>
-                        <td><input type="number" class="item-qty" min="1" required placeholder="0"></td>
-                        <td><input type="text" class="item-unit" required readonly placeholder="หน่วยนับ" style="background-color: #f3f4f6;"></td>
-                        <td><input type="text" class="item-code" readonly placeholder="รหัสวัสดุ" style="background-color: #f3f4f6;"></td>
+                        <td><input type="number" class="item-qty" min="1" step="1" required placeholder="0"></td>
+                        <td><input type="text" class="item-unit" required readonly placeholder="หน่วยนับ"
+                                style="background-color: #F0F7F4;"></td>
+                        <td><input type="text" class="item-code" readonly placeholder="รหัสวัสดุ"
+                                style="background-color: #F0F7F4;"></td>
                         <td><input type="text" class="item-req-no" value="800000"></td>
                         <td><input type="text" class="item-pay-no" value="490000"></td>
-                        <td style="text-align: center;"><button type="button" class="btn-delete-row" onclick="deleteRow(this)">❌</button></td>
+                        <td style="text-align: center;"><button type="button" class="btn-delete-row"
+                                onclick="deleteRow(this)">❌</button></td>
                     </tr>
                 </tbody>
             </table>
-            
+
             <div style="margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap;">
-                <button type="button" class="btn btn-secondary" style="padding: 8px 16px; font-size: 0.88rem;" onclick="addNewRow()">➕ เพิ่มรายการต่อ</button>
-                <button type="button" onclick="openDriveFolder()" style="background-color: #003366; color: white; padding: 8px 16px; font-size: 0.88rem; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; transition: 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                    🖼️ รูปภาพรายการวัสดุสำนักงาน
-                </button>
+                <button type="button" class="btn btn-secondary" style="padding: 8px 16px; font-size: 0.88rem;"
+                    onclick="addNewRow()">➕ เพิ่มรายการต่อ</button>
+                <button type="button" class="rx-btn rx-btn-lilac" style="padding: 8px 16px; font-size: 0.88rem;" onclick="openDriveFolder()">🖼️ รูปภาพรายการวัสดุสำนักงาน</button>
             </div>
         </div>
 
         <!-- 📌 ส่วนที่ 3: รายชื่อผู้ลงนาม -->
-        <h3 style="margin: 35px 0 15px 0; font-size: 1.1rem; color: #34495E; border-bottom: 2px dashed #EAECEE; padding-bottom: 8px;">👤 รายชื่อนามสกุลผู้ลงนาม</h3>
-        
+        <h3
+            style="margin: 35px 0 15px 0; font-size: 1.1rem; color: #0B6B54; border-bottom: 2px dashed rgba(15,191,148,.32); padding-bottom: 8px;">
+            👤 รายชื่อนามสกุลผู้ลงนาม</h3>
+
         <div class="form-grid">
             <div class="form-group">
                 <label for="requesterName">ชื่อ-นามสกุล (ผู้ขอเบิก/ผู้รับของ) <span class="required">*</span></label>
-                <input type="text" id="requesterName" name="requesterName" required placeholder="-- กรุณากรอกชื่อ-นามสกุล --">
+                <input type="text" id="requesterName" name="requesterName" required
+                    placeholder="-- กรุณากรอกชื่อ-นามสกุล --">
             </div>
-            
+
             <div class="form-group">
                 <label for="supplyHeadName">ชื่อ-นามสกุล (หัวหน้าหน่วยพัสดุ)</label>
-                <input type="text" id="supplyHeadName" name="supplyHeadName" value="นายสุบัณฑิต พุ่มเจริญ" readonly style="background-color: #F2F4F4; color: #7F8C8D; cursor: not-allowed;">
+                <input type="text" id="supplyHeadName" name="supplyHeadName" value="นายสุบัณฑิต พุ่มเจริญ" readonly
+                    style="background-color: #F0F7F4; color: #64857D; cursor: not-allowed;">
             </div>
 
             <div class="form-group">
                 <label for="accountantName">ชื่อ-นามสกุล (ผู้ตัดบัญชีวัสดุ/ผู้จ่ายของ)</label>
-                <input type="text" id="accountantName" name="accountantName" value="นางสาววิษณีย์ เวรุตัง" readonly style="background-color: #F2F4F4; color: #7F8C8D; cursor: not-allowed;">
+                <input type="text" id="accountantName" name="accountantName" value="นางสาววิษณีย์ เวรุตัง" readonly
+                    style="background-color: #F0F7F4; color: #64857D; cursor: not-allowed;">
             </div>
 
             <!-- <div class="form-group">
                 <label for="payerName">ชื่อ-นามสกุล (ผู้จ่ายของ)</label>
-                <input type="text" id="payerName" name="payerName" value="นางสาววิษณีย์ เวรุตัง" readonly style="background-color: #F2F4F4; color: #7F8C8D; cursor: not-allowed;">
+                <input type="text" id="payerName" name="payerName" value="นางสาววิษณีย์ เวรุตัง" readonly style="background-color: #F0F7F4; color: #64857D; cursor: not-allowed;">
             </div> -->
         </div>
 
         <!-- 📌 ส่วนที่ 4: กล่องแจ้งเตือนความถูกต้อง -->
-        <div style="background-color: #fff5f5; border-left: 5px solid #ef4444; padding: 14px 18px; margin: 25px 0; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-            <p style="margin: 0; color: #b91c1c; font-size: 0.92rem; font-weight: 500; display: flex; align-items: center; gap: 8px; line-height: 1.5;">
-                ⚠️ <span><strong style="text-decoration: underline;">โน้ตข้อความสำคัญ:</strong> โปรดตรวจสอบข้อมูลทั้งหมดให้ถูกต้องก่อนกดบันทึก หากบันทึกแล้วข้อมูลจะเข้าระบบและจะไม่สามารถกลับมาแก้ไขได้อีก สามารถดูตัวอย่างเอกสารที่ปุ่มสีฟ้า</span>
+        <div
+            style="background: linear-gradient(120deg, #FFF6F7 0%, #FFF1F8 100%); border-left: 5px solid #FF8FAB; padding: 14px 18px; margin: 25px 0; border-radius: 14px; box-shadow: 0 10px 20px -18px rgba(255,143,171,.9);">
+            <p
+                style="margin: 0; color: #B4272C; font-size: 0.92rem; font-weight: 500; display: flex; align-items: center; gap: 8px; line-height: 1.5;">
+                ⚠️ <span><strong style="text-decoration: underline;">โน้ตข้อความสำคัญ:</strong>
+                    โปรดตรวจสอบข้อมูลทั้งหมดให้ถูกต้องก่อนกดบันทึก
+                    หากบันทึกแล้วข้อมูลจะเข้าระบบและจะไม่สามารถกลับมาแก้ไขได้อีก
+                    สามารถดูตัวอย่างเอกสารที่ปุ่มสีฟ้า</span>
             </p>
         </div>
 
         <!-- 📌 ส่วนที่ 5: ปุ่มแอ็กชันด้านล่าง -->
         <div class="form-actions" style="display: flex; gap: 12px; justify-content: flex-end; flex-wrap: wrap;">
             <button type="button" class="btn btn-secondary" onclick="resetForm()">ล้างข้อมูล</button>
-            
-            <button type="button" onclick="handleFormSubmit('preview')" style="background-color: #0284c7; color: white; padding: 10px 20px; border: none; border-radius: 10px; cursor: pointer; font-weight: 500; transition: 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.1); font-size: 0.95rem;">
-                👁️ ตัวอย่างเอกสาร
-            </button>
-            
-            <button type="button" onclick="handleFormSubmit('save')" style="background-color: #22c55e; color: white; padding: 10px 20px; border: none; border-radius: 10px; cursor: pointer; font-weight: 500; transition: 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.1); font-size: 0.95rem;">
-                💾 บันทึกข้อมูลลงระบบและออกเอกสาร
-            </button>
+
+            <button type="button" class="rx-btn rx-btn-info" onclick="handleFormSubmit('preview')">👁️ ตัวอย่างเอกสาร</button>
+
+            <button type="button" class="rx-btn rx-btn-ok" onclick="handleFormSubmit('save')">💾 บันทึกข้อมูลลงระบบและออกเอกสาร</button>
         </div>
     </form>
 </div>

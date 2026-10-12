@@ -810,3 +810,444 @@ select:focus {
 .hidden {
     display: none !important;
 }
+
+/* ==========================================================
+   🎨 7. RxBUU PHARMACY THEME (มินต์เขียว-เทอรควอยซ์-ชมพูพาสเทล)
+   ปรับเฉพาะสีและลูกเล่น — โครงสร้าง/ตำแหน่งเดิมไม่เปลี่ยน
+   ========================================================== */
+:root {
+    --rx-green: #0FBF94;
+    --rx-green-deep: #0B8F70;
+    --rx-green-ink: #0D3B33;
+    --rx-teal: #2EC5D3;
+    --rx-mint: #D9F7EC;
+    --rx-pink: #FF9EC4;
+    --rx-lilac: #8F7BD6;
+    --rx-line: rgba(15, 191, 148, 0.18);
+    --rx-shadow: 0 18px 40px -26px rgba(9, 74, 60, 0.45);
+    --rx-shadow-lg: 0 30px 60px -30px rgba(9, 74, 60, 0.5);
+
+    /* ทับตัวแปรเดิม เพื่อให้ทุกคอมโพเนนต์ที่อ้างอิงอยู่แล้วเปลี่ยนตามทั้งระบบ */
+    --bg-pastel: #EEFAF5;
+    --primary-pastel: var(--rx-mint);
+    --primary-dark: var(--rx-green-deep);
+    --success-pastel: #D8F8E6;
+    --text-dark: var(--rx-green-ink);
+}
+
+/* พื้นหลัง: มินต์ → ฟ้า → ชมพูอ่อน + แสงเบลอ */
+body {
+    background:
+        radial-gradient(1100px 620px at 6% -8%, #DFFAF0 0%, rgba(223, 250, 240, 0) 62%),
+        radial-gradient(900px 520px at 102% -4%, #E6F6FF 0%, rgba(230, 246, 255, 0) 58%),
+        radial-gradient(820px 620px at 50% 112%, #FFEEF7 0%, rgba(255, 238, 247, 0) 62%),
+        linear-gradient(160deg, #F4FDF9 0%, #F7FCFF 50%, #FFF7FB 100%);
+    background-attachment: fixed;
+    color: var(--rx-green-ink);
+}
+
+/* 💊 ลูกเล่น: วงแสงนุ่ม ๆ ลอยช้า ๆ หลังเนื้อหา (ไม่บังการกด ไม่พิมพ์ติดกระดาษ) */
+body::before,
+body::after {
+    content: "";
+    position: fixed;
+    width: 340px;
+    height: 340px;
+    border-radius: 50%;
+    filter: blur(60px);
+    opacity: 0.55;
+    z-index: -1;
+    pointer-events: none;
+    animation: rxFloat 16s ease-in-out infinite;
+}
+
+body::before {
+    top: -70px;
+    left: -90px;
+    background: radial-gradient(circle at 30% 30%, #9FF0D6, rgba(159, 240, 214, 0));
+}
+
+body::after {
+    bottom: -90px;
+    right: -70px;
+    background: radial-gradient(circle at 60% 40%, #FFCFE4, rgba(255, 207, 228, 0));
+    animation-delay: -8s;
+}
+
+@keyframes rxFloat {
+    0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+    50%      { transform: translate3d(0, -26px, 0) scale(1.07); }
+}
+
+/* ---------- Navbar ---------- */
+.navbar {
+    background: linear-gradient(120deg, #0B8F70 0%, #0FBF94 55%, #2EC5D3 100%) !important;
+    border-bottom: none !important;
+    border-radius: 0 0 26px 26px;
+    box-shadow: 0 16px 34px -24px rgba(11, 143, 112, 0.95);
+}
+
+.rx-nav-pill {
+    padding: 7px 16px;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.22);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    color: #FFFFFF;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    backdrop-filter: blur(4px);
+    transition: all 0.22s ease;
+}
+
+.rx-nav-pill:hover {
+    background-color: rgba(255, 255, 255, 0.38);
+    transform: translateY(-2px);
+    box-shadow: 0 10px 20px -12px rgba(0, 0, 0, 0.5);
+}
+
+/* ---------- การ์ด ---------- */
+.card {
+    position: relative;
+    border-radius: 24px;
+    border: 1px solid var(--rx-line);
+    box-shadow: var(--rx-shadow);
+    animation: rxRise 0.45s ease-out both;
+}
+
+/* แถบคาดสีมุมบนการ์ด (เภสัช = 3 สี มินต์-เทอร์ควอยซ์-ชมพู) */
+.card::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 6px;
+    border-radius: 24px 24px 0 0;
+    background: linear-gradient(90deg, var(--rx-green) 0%, var(--rx-teal) 45%, var(--rx-pink) 100%);
+}
+
+@keyframes rxRise {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* หัวข้อการ์ดเป็นตัวอักษรไล่สี */
+.card-header h2 {
+    background: linear-gradient(100deg, #0B8F70 0%, #0FBF94 38%, #2EC5D3 68%, #8F7BD6 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+/* ---------- ปุ่มต่าง ๆ: ทรงแคปซูล ลอยขึ้นเล็กน้อยตอนชี้ ---------- */
+.btn,
+.rx-btn {
+    border-radius: 999px;
+    font-weight: 500;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.rx-btn {
+    padding: 11px 24px;
+    border: none;
+    cursor: pointer;
+    font-size: 0.95rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: #FFFFFF;
+    box-shadow: 0 14px 26px -18px rgba(11, 143, 112, 0.95);
+}
+
+.rx-btn-ok {
+    background: linear-gradient(135deg, #16C79A 0%, #0B8F70 100%);
+}
+
+.rx-btn-info {
+    background: linear-gradient(135deg, #2EC5D3 0%, #0E8FA8 100%);
+}
+
+.rx-btn-lilac {
+    background: linear-gradient(135deg, #8F7BD6 0%, #6F5BC4 100%);
+}
+
+.rx-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 20px 34px -18px rgba(11, 143, 112, 0.85);
+}
+
+.rx-btn:active {
+    transform: translateY(0) scale(0.99);
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #0FBF94 0%, #2EC5D3 100%);
+    color: #FFFFFF;
+}
+
+.btn-primary:hover {
+    background: linear-gradient(135deg, #0B8F70 0%, #0FBF94 100%);
+    color: #FFFFFF;
+}
+
+.btn-secondary {
+    background: #EDF5F2;
+    color: #3F6B60;
+}
+
+.btn-secondary:hover {
+    background: #E0EEE9;
+    transform: translateY(-2px);
+}
+
+.btn-success {
+    background: linear-gradient(135deg, #34D399 0%, #0FBF94 100%);
+    color: #FFFFFF;
+}
+
+.btn-danger {
+    background: linear-gradient(135deg, #FFB3D1 0%, #FF8FB8 100%);
+    color: #5B2140;
+}
+
+.btn-danger:hover {
+    background: linear-gradient(135deg, #FF9EC4 0%, #F26FA3 100%);
+    color: #3F1630;
+}
+
+.btn-history {
+    background: linear-gradient(135deg, #B7A6F1 0%, #8F7BD6 100%);
+    color: #FFFFFF;
+}
+
+.btn-history:hover {
+    background: linear-gradient(135deg, #A692EC 0%, #7A64CE 100%);
+    color: #FFFFFF;
+}
+
+.btn-delete-row {
+    transition: transform 0.15s ease;
+}
+
+.btn-delete-row:hover {
+    transform: scale(1.2) rotate(-6deg);
+}
+
+/* ---------- ฟอร์ม & ตัวรับข้อมูล ---------- */
+input[type="text"],
+input[type="date"],
+input[type="number"],
+select {
+    border: 2px solid #E1F0EB;
+    border-radius: 14px;
+    background-color: #FBFFFD;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+input:focus,
+select:focus {
+    border-color: var(--rx-green);
+    background-color: #FFFFFF;
+    box-shadow: 0 0 0 4px rgba(15, 191, 148, 0.16);
+}
+
+.input-items-table th {
+    background: linear-gradient(180deg, #EAFDF5 0%, #DBF8EC 100%);
+    color: #0B6B54;
+    border-bottom: 2px solid var(--rx-line);
+    font-weight: 600;
+}
+
+.input-items-table td {
+    border-bottom: 1px solid #EDF7F3;
+}
+
+.input-items-table tbody tr {
+    transition: background-color 0.18s ease;
+}
+
+.input-items-table tbody tr:hover {
+    background-color: #F6FFFC;
+}
+
+/* แถวที่ JavaScript สร้างใหม่ให้หน้าตาเหมือนแถวแรกเสมอ */
+.input-items-table input,
+.input-items-table select {
+    border-radius: 12px !important;
+    border-color: #DFF2EA !important;
+}
+
+.input-items-table td input[readonly] {
+    background-color: #F1F8F5 !important;
+    color: #5F7E76;
+}
+
+/* ---------- กำลังโหลด ---------- */
+.loading-overlay {
+    background: rgba(244, 253, 249, 0.86);
+    backdrop-filter: blur(4px);
+}
+
+.spinner {
+    width: 52px;
+    height: 52px;
+    border: 5px solid var(--rx-mint);
+    border-top-color: var(--rx-green);
+}
+
+/* ---------- Modal ประวัติ ---------- */
+.modal-overlay {
+    backdrop-filter: blur(3px);
+}
+
+.modal-card {
+    border-radius: 24px;
+    box-shadow: var(--rx-shadow-lg);
+    border: 1px solid var(--rx-line);
+}
+
+.modal-header {
+    background: linear-gradient(120deg, #EAFDF6 0%, #E6F6FF 100%);
+    border-bottom: 1px solid var(--rx-line);
+}
+
+.modal-header h3 {
+    color: var(--rx-green-deep);
+    font-weight: 600;
+}
+
+.modal-close-btn {
+    border-radius: 999px;
+    transition: transform 0.18s ease, color 0.18s ease;
+}
+
+.modal-close-btn:hover {
+    color: #E5484D;
+    transform: rotate(90deg);
+}
+
+.history-table th {
+    background: #EAFDF5;
+    color: #0B6B54;
+    border-bottom: 2px solid var(--rx-line);
+}
+
+.history-table tbody tr {
+    transition: background-color 0.18s ease;
+}
+
+.history-table tbody tr:hover {
+    background-color: #F6FFFC;
+}
+
+/* ปุ่มดู/พิมพ์ในตารางประวัติ (สร้างด้วย JavaScript) */
+.btn-history-print:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 16px 26px -14px rgba(11, 143, 112, 0.95);
+}
+
+/* ---------- Popup สำเร็จ ---------- */
+#successPopup {
+    backdrop-filter: blur(3px);
+    background-color: rgba(13, 59, 51, 0.42);
+}
+
+.popup-card {
+    border-radius: 26px;
+    border: 1px solid var(--rx-line);
+    box-shadow: var(--rx-shadow-lg);
+}
+
+/* ---------- หน้าเข้าสู่ระบบ ---------- */
+.btn-login-google {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: #FFFFFF;
+    color: #0B6B54;
+    font-weight: 600;
+    border: 2px solid var(--rx-line);
+    border-radius: 999px;
+    box-shadow: 0 14px 28px -20px rgba(11, 143, 112, 0.95);
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.btn-login-google:hover {
+    border-color: var(--rx-green);
+    transform: translateY(-2px);
+    box-shadow: 0 20px 34px -20px rgba(15, 191, 148, 0.95);
+}
+
+/* ---------- Scrollbar มินต์ (เฉพาะเบราว์เซอร์ตระกูล Chromium) ---------- */
+::-webkit-scrollbar {
+    width: 11px;
+    height: 11px;
+}
+
+::-webkit-scrollbar-track {
+    background: #EFFAF6;
+}
+
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, #7BE0C2, #35C6A3);
+    border-radius: 999px;
+    border: 2px solid #EFFAF6;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, #56D3AE, #0FBF94);
+}
+
+/* กรอบโฟกัสชัดเจนสำหรับผู้ใช้คีย์บอร์ด */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+    outline: 3px solid rgba(46, 197, 211, 0.55);
+    outline-offset: 2px;
+}
+
+/* ==========================================================
+   🖨️ กติกาพิเศษสำหรับกระดาษ A4 + การพิมพ์ (คงเอกสารเดิมไว้ทุกจุด)
+   ========================================================== */
+@media screen {
+    /* กระดาษ A4 ในหน้าจอ: ขอบมน + เงาลึกขึ้นเล็กน้อย แต่ภายในยังดำ-ขาวเหมือนเดิม */
+    .a4-page {
+        border-radius: 10px;
+        box-shadow: 0 30px 60px -34px rgba(9, 74, 60, 0.55);
+    }
+}
+
+@media print {
+    body {
+        background: #FFFFFF !important;
+    }
+
+    body::before,
+    body::after {
+        display: none !important;
+    }
+
+    .a4-page {
+        border-radius: 0 !important;
+    }
+}
+
+/* ลดการเคลื่อนไหวสำหรับผู้ที่ตั้งค่าระบบไว้ */
+@media (prefers-reduced-motion: reduce) {
+    body::before,
+    body::after,
+    .card,
+    .modal-card,
+    .popup-card {
+        animation: none !important;
+    }
+
+    .btn:hover,
+    .rx-btn:hover,
+    .btn-login-google:hover,
+    .rx-nav-pill:hover {
+        transform: none !important;
+    }
+}
