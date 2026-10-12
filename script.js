@@ -2,23 +2,25 @@
 // 💥 ส่วนที่ 1: การตั้งค่าระบบ (Configuration)
 // ==========================================================
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-import { 
-    getAuth, 
-    signInWithPopup, 
-    GoogleAuthProvider, 
+import {
+    getAuth,
+    signInWithPopup,
+    signInWithRedirect,
+    getRedirectResult,
+    GoogleAuthProvider,
     onAuthStateChanged,
-    signOut 
+    signOut
 } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
 // ⚙️ 1.1 ค่า firebaseConfig
 const firebaseConfig = {
-  apiKey: "AIzaSyC-IKwMD7-vkuG0moT24EAsSyxaV8Xty6c",
-  authDomain: "pharmacy-material-system.firebaseapp.com",
-  projectId: "pharmacy-material-system",
-  storageBucket: "pharmacy-material-system.firebasestorage.app",
-  messagingSenderId: "605650439921",
-  appId: "1:605650439921:web:a351896936ba83d1e2e350",
-  measurementId: "G-EE28Y1L35G"
+    apiKey: "AIzaSyC-IKwMD7-vkuG0moT24EAsSyxaV8Xty6c",
+    authDomain: "pharmacy-material-system.firebaseapp.com",
+    projectId: "pharmacy-material-system",
+    storageBucket: "pharmacy-material-system.firebasestorage.app",
+    messagingSenderId: "605650439921",
+    appId: "1:605650439921:web:a351896936ba83d1e2e350",
+    measurementId: "G-EE28Y1L35G"
 };
 
 // 🔗 1.2 Web App URL จาก Google Apps Script (ใช้ตัวแปรนี้จุดเดียวทั้งไฟล์)
@@ -37,51 +39,287 @@ provider.setCustomParameters({
 // ตัวแปรส่วนกลาง (Global Variables)
 let rowCount = 1;
 let globalMaterialList = [];
-let currentUserFullName = ""; 
+let currentUserFullName = "";
+
+// 🔒 ตัวแปรกันบันทึกซ้ำ (retry หลังเน็ตหลุดต้องไม่ตัดสต็อกสองรอบ)
+let pendingSaveFingerprint = "";
+let pendingSaveRequestId = "";
+
+// 📌 สร้างรหัสคำขอเฉพาะของการบันทึก 1 ครั้ง (เซิร์ฟเวอร์ใช้รหัสนี้กันบันทึกซ้ำ)
+function newRequestId() {
+    try {
+        if (window.crypto && typeof window.crypto.randomUUID === "function") {
+            return window.crypto.randomUUID();
+        }
+    } catch (e) { }
+    return "req-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10);
+}
 
 // ==========================================================
 // 💥 ส่วนที่ 2: ระบบยืนยันตัวตน (Authentication) & โหลดหน้าเว็บ
 // ==========================================================
 
-// 📌 ฟังก์ชันล็อกอินด้วย Google ผ่าน Firebase Popup
-window.loginWithGoogle = async function() {
+// 📌 ฟังก์ชันตรวจสอบอุปกรณ์ (iOS หรือ Safari)
+function isIOSorSafari() {
+    const ua = navigator.userAgent;
+    const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const isSafari = /^((?!chrome|android).)*safari/i.test(ua);
+    return isIOS || isSafari;
+}
+
+// 📌 ตรวจอุปกรณ์พกพาทุกชนิด (iPhone, iPad, Android) — ใช้ในข้อความวินิจฉัย
+function isMobileDevice() {
+    const ua = navigator.userAgent;
+    const hitUA = /Android|iPad|iPhone|iPod|Mobile|Silk|Kindle|BlackBerry|Opera Mini/i.test(ua);
+    const hitPointer = (typeof window.matchMedia === "function") && window.matchMedia("(pointer: coarse)").matches;
+    return hitUA || hitPointer;
+}
+
+// ⚠️ แก้ 2026-10: เดิมมือถือ/Safari ถูกส่งไปใช้ signInWithRedirect() เสมอ ซึ่ง "ใช้ไม่ได้แล้ว"
+//    สาเหตุ: Safari 16.1+ / Chrome 115+ / Firefox 109+ บล็อก third-party storage ที่ Firebase
+//            ต้องใช้เชื่อม iframe ของ auth handler (คนละโดเมนกับเว็บเรา)
+//    อาการ: กดล็อกอิน → ไปหน้า Google → กลับมา → onAuthStateChanged ได้ null → เด้งกลับหน้าล็อกอิน
+//    หลักฐาน: https://pharm.buu.ac.th/__/auth/iframe = 404 แปลว่าไม่ได้ proxy /__/auth ไว้บนโดเมนเรา
+//    เอกสารอ้างอิง: Firebase — "Best practices for using signInWithRedirect on browsers that
+//                   block third-party storage access" (แนะนำให้ใช้ Popup ถ้าไม่ได้ proxy)
+//    วิธีใหม่: ลอง Popup ก่อนเสมอทุกอุปกรณ์ และถอยไปใช้ Redirect เฉพาะตอน Popup ถูกบล็อกจริง ๆ
+
+// 📌 ตรวจว่าเบราว์เซอร์ยอมให้เว็บไซต์เก็บข้อมูล
+//    ถ้า iPhone เปิด "บล็อกคุกกี้ทั้งหมด" หรืออยู่ในโหมดไม่ระบุตัวตน
+//    Firebase จะจำสถานะล็อกอินไม่ได้ → ล็อกอินเสร็จแล้วเด้งกลับหน้าล็อกอิน
+function isLocalStorageUsable() {
+    try {
+        const probe = "__rx_probe__";
+        window.localStorage.setItem(probe, "1");
+        window.localStorage.removeItem(probe);
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+// 📌 ข้อความแนะนำเมื่อ Safari บล็อกการเก็บข้อมูล
+const STORAGE_BLOCKED_MESSAGE = [
+    "⛔ Safari ตั้งค่าไม่ให้เว็บไซต์เก็บข้อมูล ทำให้ล็อกอินผ่าน Google แล้วถูกเด้งกลับหน้าล็อกอินทุกครั้ง",
+    "",
+    "วิธีแก้:",
+    "1) การตั้งค่า → Safari → ความเป็นส่วนตัวและความปลอดภัย → ปิด บล็อกคุกกี้ทั้งหมด",
+    "2) หรือปิดโหมดไม่ระบุตัวตน แล้วเปิดหน้านี้ใหม่อีกครั้ง"
+].join("\n");
+
+// 📌 หนี HTML ป้องกัน XSS ตอนแสดงข้อมูลที่มาจาก Google Sheets
+function escapeHtml(value) {
+    return String((value === null || value === undefined) ? "" : value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+// 📌 ข้อมูลวินิจฉัย ช่วยระบุสาเหตุเมื่อล็อกอินล้มเหลว
+function buildDiagnostics(extra) {
+    const parts = [
+        "host=" + (window.location.host || "ไฟล์ท้องถิ่น"),
+        "storage=" + (isLocalStorageUsable() ? "ปกติ" : "ถูกบล็อก"),
+        "device=" + (isMobileDevice() ? "มือถือ" : "คอม"),
+        "safari=" + (isIOSorSafari() ? "ใช่" : "ไม่"),
+        "user=" + (auth.currentUser ? auth.currentUser.email : "ยังไม่มี")
+    ];
+    if (extra) parts.push(extra);
+    return parts.join(" | ");
+}
+
+// 📌 fetch ที่มี timeout ป้องกันค้างคาบนเน็ตมือถือ
+async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
+    if (typeof AbortController === "undefined") {
+        return fetch(url, options);
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, Object.assign({}, options, { signal: controller.signal }));
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+// 📌 helper อ่าน/เขียน localStorage แบบไม่ให้ exception ทำให้หลุดออกจากระบบ
+function safeSetLocalStorage(key, value) {
+    try { window.localStorage.setItem(key, value); } catch (e) { console.warn("localStorage.setItem ล้มเหลว:", e); }
+}
+function safeRemoveLocalStorage(key) {
+    try { window.localStorage.removeItem(key); } catch (e) { }
+}
+function safeGetLocalStorage(key) {
+    try { return window.localStorage.getItem(key); } catch (e) { return null; }
+}
+
+// 📌 ฟังก์ชันแปลง Error Code ของ Firebase ให้อ่านเข้าใจง่าย
+function getAuthErrorMessage(error) {
+    if (!error) return "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ";
+    const code = error.code || "";
+    switch (code) {
+        case "auth/unauthorized-domain":
+            return "⛔ โดเมนนี้ยังไม่ได้เพิ่มใน Authorized Domains ของ Firebase Console";
+        case "auth/popup-blocked":
+            return "เบราว์เซอร์บล็อกหน้าต่าง Popup กำลังเปลี่ยนไปใช้โหมดเข้าสู่ระบบเต็มหน้าจอ...";
+        case "auth/popup-closed-by-user":
+            return "หน้าต่างเข้าสู่ระบบถูกปิดก่อนทำรายการเสร็จ";
+        case "auth/cancelled-popup-request":
+            return "มีการเปิดหน้าต่างเข้าสู่ระบบซ้ำซ้อน";
+        case "auth/network-request-failed":
+            return "การเชื่อมต่ออินเทอร์เน็ตล้มเหลว กรุณาตรวจสอบสัญญาณเน็ต";
+        case "auth/redirect-pending":
+            return "ระบบยังรอผลการล็อกอินอยู่ กรุณากดปุ่มล็อกอินอีกครั้ง";
+        case "auth/redirect-cancelled-by-user":
+            return "การเข้าสู่ระบบถูกยกเลิก";
+        case "auth/invalid-credential":
+        case "auth/invalid-argument":
+            return "ไม่สามารถยืนยันตัวตนกับ Google ได้ กรุณากดล็อกอินใหม่อีกครั้ง";
+        case "auth/user-disabled":
+            return "บัญชีนี้ถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ";
+        case "auth/too-many-requests":
+            return "พยายามเข้าสู่ระบบบ่อยเกินไป กรุณารอสักครู่แล้วลองใหม่";
+        default:
+            return error.message || "เกิดข้อผิดพลาดในการเข้าสู่ระบบ";
+    }
+}
+
+// 📌 แสดงข้อผิดพลาดพร้อมข้อมูลวินิจฉัย
+function displayAuthError(error) {
+    const alertEl = document.getElementById('authAlert');
+    const statusEl = document.getElementById('loginStatus');
+    if (statusEl) statusEl.innerText = "";
+    if (alertEl) {
+        const code = (error && error.code) ? " [" + error.code + "]" : "";
+        alertEl.style.display = 'block';
+        alertEl.style.whiteSpace = 'pre-line';
+        alertEl.innerText = "เกิดข้อผิดพลาด: " + getAuthErrorMessage(error) + code + "\n" + buildDiagnostics();
+    }
+}
+
+function displayAuthMessage(message) {
+    const alertEl = document.getElementById('authAlert');
+    if (!alertEl) return;
+    alertEl.style.display = 'block';
+    alertEl.style.whiteSpace = 'pre-line';
+    alertEl.innerText = message;
+}
+
+// ==========================================================
+// 📱 ระบบ Redirect Login (มือถือ) + Flag ตรวจจับผลลัพธ์ที่หายไป
+// ==========================================================
+
+const PENDING_LOGIN_KEY = "rxPendingRedirectLogin";
+
+function setPendingLoginFlag() {
+    try { window.sessionStorage.setItem(PENDING_LOGIN_KEY, String(Date.now())); } catch (e) { }
+}
+function clearPendingLoginFlag() {
+    try { window.sessionStorage.removeItem(PENDING_LOGIN_KEY); } catch (e) { }
+}
+function getPendingLoginFlag() {
+    try { return Number(window.sessionStorage.getItem(PENDING_LOGIN_KEY) || 0); } catch (e) { return 0; }
+}
+
+// 📌 ฟังก์ชันล็อกอินด้วย Google รองรับทั้ง PC และโทรศัพท์มือถือ (iOS Safari / Android)
+window.loginWithGoogle = async function () {
     const statusEl = document.getElementById('loginStatus');
     const alertEl = document.getElementById('authAlert');
-    if (alertEl) alertEl.style.display = 'none';
-    if (statusEl) statusEl.innerText = "กำลังเชื่อมต่อ Google...";
+    if (alertEl) {
+        alertEl.style.display = 'none';
+        alertEl.innerText = '';
+    }
+    if (statusEl) statusEl.innerHTML = `<span style="color:#0B8F70;">⏳ กำลังเชื่อมต่อ Google...</span>`;
 
+    // ✅ ใช้ Popup ก่อนเสมอ ทุกอุปกรณ์ (ดูเหตุผลในคอมเมนต์ด้านบน)
+    setPendingLoginFlag();
     try {
-        await signOut(auth);
         await signInWithPopup(auth, provider);
-    } catch (error) {
-        console.error("Login failed:", error);
-        if (alertEl) {
-            alertEl.style.display = 'block';
-            alertEl.innerText = "เกิดข้อผิดพลาดในการเข้าสู่ระบบ: " + error.message;
-        }
+        clearPendingLoginFlag();
         if (statusEl) statusEl.innerText = "";
+        return;
+    } catch (error) {
+        console.error("Popup login failed:", error);
+        const code = (error && error.code) || "";
+
+        // ผู้ใช้กดปิดหน้าต่างล็อกอินเอง → หยุดเงียบ ๆ ไม่ต้องเด้งไปไหน
+        if (code === 'auth/popup-closed-by-user' || code === 'auth/user-cancelled') {
+            clearPendingLoginFlag();
+            if (statusEl) statusEl.innerText = "";
+            return;
+        }
+
+        // เบราว์เซอร์ไม่ให้เก็บข้อมูลเลย → แจ้งวิธีปิดการบล็อกคุกกี้
+        if (code === 'auth/web-storage-unsupported') {
+            clearPendingLoginFlag();
+            displayAuthMessage(STORAGE_BLOCKED_MESSAGE + "\n" + buildDiagnostics());
+            return;
+        }
+
+        // Popup ถูกบล็อกจริง ๆ → ค่อยถอยไปใช้ Redirect (ทางเลือกสุดท้าย)
+        if (code === 'auth/popup-blocked' || code === 'auth/cancelled-popup-request' ||
+            code === 'auth/operation-not-supported-in-this-environment') {
+            if (statusEl) statusEl.innerHTML = `<span style="color:#C2761A;">⏳ หน้าต่างถูกบล็อก กำลังเปลี่ยนหน้าไป Google...</span>`;
+            try {
+                await signInWithRedirect(auth, provider);
+                return;
+            } catch (redirectError) {
+                clearPendingLoginFlag();
+                displayAuthError(redirectError);
+                return;
+            }
+        }
+
+        clearPendingLoginFlag();
+        displayAuthError(error);
     }
 };
 
-// 📌 ฟังก์ชันช่วยตรวจสอบสิทธิ์ใน UserMaster (พร้อมระบบ Retry อัตโนมัติ 3 ครั้ง)
-async function verifyUserPermission(email, retryCount = 1, maxRetries = 3) {
+// 📌 ขอ ID token ของผู้ใช้ปัจจุบัน (ใช้ยืนยันตัวตนกับ Google Apps Script)
+async function getAuthTokenOrNull() {
+    try {
+        // รอให้ Firebase คืนสถานะล็อกอินจากที่เก็บในเครื่องก่อน (สำคัญบน Safari/มือถือ
+        // ที่ currentUser อาจยังว่างชั่วครูหลังล็อกอินด้วย redirect) — รอสูงสุด 3 วิ กันค้าง
+        if (typeof auth.authStateReady === "function") {
+            await Promise.race([
+                auth.authStateReady(),
+                new Promise(resolve => setTimeout(resolve, 3000))
+            ]);
+        }
+
+        if (auth.currentUser) {
+            return await auth.currentUser.getIdToken();
+        }
+    } catch (e) {
+        console.warn("ขอ ID token ไม่สำเร็จ:", e);
+    }
+    return null;
+}
+
+// 📌 ฟังก์ชันช่วยตรวจสอบสิทธิ์ใน UserMaster (retry แบบ backoff + timeout)
+async function verifyUserPermission(email, retryCount = 1, maxRetries = 5) {
     const statusEl = document.getElementById('loginStatus');
-    
-    if (statusEl) {
-        statusEl.innerText = retryCount === 1 
-            ? "กำลังตรวจสอบสิทธิ์ในระบบ..." 
-            : `กำลังพยายามตรวจสอบสิทธิ์อีกครั้ง (${retryCount}/${maxRetries})...`;
+
+    if (statusEl && retryCount === 1) {
+        statusEl.innerHTML = `<span style="color:#0B8F70;">⏳ กำลังตรวจสอบสิทธิ์ในระบบ...</span>`;
     }
 
     try {
-        const response = await fetch(APPS_SCRIPT_URL, {
+        const response = await fetchWithTimeout(APPS_SCRIPT_URL, {
             method: 'POST',
+            mode: 'cors',
+            credentials: 'omit',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
             body: JSON.stringify({
                 action: "checkUser",
-                email: email
+                email: email,
+                // 🔒 แนบ token เพื่อให้เซิร์ฟเวอร์ยืนยันว่าเป็นอีเมลของเจ้าของจริง
+                //    (ถ้าไม่แนบ เซิร์ฟเวอร์จะไม่ส่งชื่อ-นามสกุลจากทะเบียนกลับมา)
+                idToken: await getAuthTokenOrNull()
             })
-        });
+        }, 25000);
 
         if (!response.ok) {
             throw new Error(`HTTP Error status: ${response.status}`);
@@ -97,99 +335,287 @@ async function verifyUserPermission(email, retryCount = 1, maxRetries = 3) {
         return result;
 
     } catch (error) {
-        console.warn(`⚠️ ตรวจสอบสิทธิ์ล้มเหลว ครั้งที่ ${retryCount}/${maxRetries}:`, error.message);
-
         if (retryCount < maxRetries) {
-            await new Promise(resolve => setTimeout(resolve, 1500));
+            // backoff: 0.5s, 1s, 2s, 4s — ให้ Apps Script มีเวลา warm up บนเน็ตมือถือ
+            const delay = Math.min(8000, 500 * Math.pow(2, retryCount - 1));
+            await new Promise(resolve => setTimeout(resolve, delay));
             return await verifyUserPermission(email, retryCount + 1, maxRetries);
-        } else {
-            throw error;
         }
+        console.warn(`⚠️ ตรวจสอบสิทธิ์ล้มเหลว:`, error.message);
+        throw error;
     }
 }
 
+// 📌 โหลด Component ฟอร์มและพรีวิว (retry และคืนค่า true เฉพาะเมื่อโหลดได้จริงทั้งคู่)
+function loadComponentsAttempt() {
+    return Promise.all([
+        loadComponent('formSection', 'form.html'),
+        loadComponent('previewSection', 'preview.html')
+    ]).then(results => results.every(Boolean));
+}
+
+let componentsLoadedPromise = loadComponentsAttempt();
+
+async function ensureComponents() {
+    const ok = await componentsLoadedPromise;
+    if (ok) return true;
+    componentsLoadedPromise = loadComponentsAttempt();
+    return await componentsLoadedPromise;
+}
+
+// 📌 ฟังก์ชันช่วยโหลดคอมโพเนนต์ HTML
+async function loadComponent(elementId, filePath, attempt = 1, maxAttempts = 3) {
+    try {
+        const response = await fetchWithTimeout(filePath, { cache: "no-cache" }, 15000);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const html = await response.text();
+        const el = document.getElementById(elementId);
+        if (!el) throw new Error("ไม่พบองค์ประกอบปลายทาง #" + elementId);
+        if (!html || !html.trim()) throw new Error("ไฟล์ " + filePath + " ว่างเปล่า");
+        el.innerHTML = html;
+        return true;
+    } catch (error) {
+        console.error(`Error loading ${filePath} (ครั้งที่ ${attempt}):`, error);
+        if (attempt < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 400 * attempt));
+            return loadComponent(elementId, filePath, attempt + 1, maxAttempts);
+        }
+        return false;
+    }
+}
+
+// ==========================================================
+// 🔑 ขั้นตอนเข้าสู่ระบบ
+// ==========================================================
+
+// 📌 แสดงฟอร์มเมื่อทุกอย่างพร้อมแล้ว
+function enterSystem(checkResult, user) {
+    const loginSec = document.getElementById('loginSection');
+    const formSec = document.getElementById('formSection');
+    const statusEl = document.getElementById('loginStatus');
+    const alertEl = document.getElementById('authAlert');
+
+    safeSetLocalStorage("userEmail", user.email);
+    currentUserFullName = (checkResult && checkResult.fullName) || user.displayName || user.email;
+
+    if (loginSec) loginSec.classList.add('hidden');
+    if (formSec) formSec.classList.remove('hidden');
+
+    const requesterInput = document.getElementById('requesterName');
+    if (requesterInput) requesterInput.value = currentUserFullName;
+
+    initDefaultDate();
+
+    // 🟢 มีแคชในเครื่องแล้ว → แสดงทันที 0 วิ / ยังไม่มี → บอกว่ากำลังโหลด
+    if (globalMaterialList && globalMaterialList.length > 0) {
+        renderAllDropdowns();
+    } else {
+        setDropdownsStatus("-- กำลังโหลดข้อมูลวัสดุ... --");
+    }
+
+    // 🔒 เซิร์ฟเวอร์ให้ดึงรายการวัสดุได้หลังยืนยันตัวตนแล้วเท่านั้น (มี "คงเหลือ" ติดมาด้วย)
+    loadMaterials();
+
+    if (statusEl) statusEl.innerText = "";
+    if (alertEl) {
+        alertEl.style.display = 'none';
+        alertEl.innerText = '';
+    }
+
+    // หากเปิดเว็บมาแล้วรายการยังโหลดไม่เสร็จ ให้รอต่อแบบเงียบๆ
+    setTimeout(() => {
+        try {
+            if (!globalMaterialList || globalMaterialList.length === 0) {
+                materialsLoadingPromise.then(() => renderAllDropdowns()).catch(() => { });
+            }
+        } catch (e) { /* ยังไม่ถึงตอนสร้าง materialsLoadingPromise */ }
+    }, 0);
+}
+
+// 📌 บัญชีไม่มีสิทธิ์ → เฉพาะกรณีนี้เท่านั้นที่ signOut
+async function showDenied(user) {
+    const loginSec = document.getElementById('loginSection');
+    const formSec = document.getElementById('formSection');
+    const statusEl = document.getElementById('loginStatus');
+
+    await signOut(auth);
+    currentUserFullName = "";
+    safeRemoveLocalStorage("userEmail");
+
+    if (statusEl) statusEl.innerText = "";
+    if (loginSec) loginSec.classList.remove('hidden');
+    if (formSec) formSec.classList.add('hidden');
+
+    alert("⛔ บัญชี (" + user.email + ") ไม่มีสิทธิ์เข้าใช้งานระบบ\nกรุณาเปลี่ยนไปใช้บัญชีอื่น หรือติดต่อผู้ดูแลระบบเพื่อเพิ่มรายชื่อใน UserMaster");
+}
+
+// 📌 เครือข่าย/เซิร์ฟเวอร์มีปัญหา → "ห้าม signOut" เพื่อไม่ให้ผู้ใช้ถูกถีบออกจากระบบ
+//    (สาเหตุหลักที่ทำให้ล็อกอินบนมือถือแล้วเด้งกลับหน้าล็อกอิน)
+function showPermissionRetry(email, error) {
+    const statusEl = document.getElementById('loginStatus');
+    if (!statusEl) return;
+
+    statusEl.innerHTML = `
+        <div style="margin-top: 10px; text-align: left;">
+            <span style="color: #C43D3D; font-weight: bold;">⚠️ ยังเข้าสู่ระบบอยู่ แต่ติดต่อเซิร์ฟเวอร์ตรวจสอบสิทธิ์ไม่สำเร็จ</span><br>
+            <span style="color: #6B8B83; font-size: 0.78rem;">${escapeHtml(String((error && error.message) || error))}</span><br>
+            <span style="color: #6B8B83; font-size: 0.75rem;">${escapeHtml(buildDiagnostics())}</span>
+            <button type="button" id="btnRetryPermission" style="margin-top: 12px; padding: 9px 20px; background: linear-gradient(135deg, #0FBF94, #2EC5D3); color: white; border: none; border-radius: 999px; cursor: pointer; font-weight: 500; box-shadow: 0 12px 22px -16px rgba(11,143,112,.95);">🔄 ลองใหม่ (ไม่ต้องล็อกอินใหม่)</button>
+        </div>`;
+
+    const btn = document.getElementById('btnRetryPermission');
+    if (btn) btn.onclick = () => retryPermission(email);
+}
+
+// 📌 กดปุ่ม "ลองใหม่" → ตรวจสอบสิทธิ์ซ้ำโดยคงสถานะล็อกอินไว้
+async function retryPermission(email) {
+    const statusEl = document.getElementById('loginStatus');
+    if (statusEl) statusEl.innerHTML = `<span style="color:#0B8F70;">⏳ กำลังตรวจสอบสิทธิ์ในระบบ...</span>`;
+
+    try {
+        const results = await Promise.all([
+            verifyUserPermission(email),
+            ensureComponents()
+        ]);
+        const checkResult = results[0];
+        const componentsOk = results[1];
+
+        if (!checkResult || (!checkResult.allowed && !checkResult.isAllowed)) {
+            await showDenied({ email: email });
+            return;
+        }
+        if (!componentsOk) {
+            showComponentError();
+            return;
+        }
+        enterSystem(checkResult, auth.currentUser || { email: email });
+    } catch (err) {
+        console.error("Retry permission failed:", err);
+        showPermissionRetry(email, err);
+    }
+}
+
+// 📌 โหลดฟอร์มไม่สำเร็จ → แจ้งให้ทราบ แทนการซ่อนหน้าล็อกอินแล้วเจอจอขาว
+function showComponentError() {
+    const statusEl = document.getElementById('loginStatus');
+    if (!statusEl) return;
+    statusEl.innerHTML = `
+        <div style="margin-top: 10px;">
+            <span style="color: #C43D3D; font-weight: bold;">⚠️ โหลดส่วนฟอร์มไม่สำเร็จ (form.html / preview.html)</span><br>
+            <button type="button" onclick="location.reload()" style="margin-top: 12px; padding: 9px 20px; background: linear-gradient(135deg, #0FBF94, #2EC5D3); color: white; border: none; border-radius: 999px; cursor: pointer; font-weight: 500; box-shadow: 0 12px 22px -16px rgba(11,143,112,.95);">🔄 โหลดหน้าใหม่</button>
+        </div>`;
+}
+
 // 📌 ตัวตรวจจับสถานะการล็อกอิน
-onAuthStateChanged(auth, async (user) => {
+async function handleAuthState(user) {
     const loginSec = document.getElementById('loginSection');
     const formSec = document.getElementById('formSection');
     const statusEl = document.getElementById('loginStatus');
 
     if (user) {
-        try {
-            const checkResult = await verifyUserPermission(user.email);
+        clearPendingLoginFlag();
 
-            if (!checkResult || (!checkResult.allowed && !checkResult.isAllowed)) {
-                await signOut(auth);
-                currentUserFullName = "";
-                localStorage.removeItem("userEmail"); // ลบอีเมลเมื่อไม่มีสิทธิ์
-                
-                if (statusEl) statusEl.innerText = "";
-                if (loginSec) loginSec.classList.remove('hidden');
-                if (formSec) formSec.classList.add('hidden');
-
-                alert(`⛔ บัญชี (${user.email}) ไม่มีสิทธิ์เข้าใช้งานระบบ\nกรุณาเปลี่ยนไปใช้บัญชีอื่น หรือติดต่อผู้ดูแลระบบเพื่อเพิ่มรายชื่อใน UserMaster`);
-                return;
-            }
-
-            // 💾 บันทึกอีเมลลง localStorage สำหรับใช้งานทั่วระบบ
-            localStorage.setItem("userEmail", user.email);
-
-            currentUserFullName = checkResult.fullName || user.displayName || user.email;
-
-            if (loginSec) loginSec.classList.add('hidden');
-            
-            await loadComponent('formSection', 'form.html');
-            await loadComponent('previewSection', 'preview.html');
-            
-            if (formSec) formSec.classList.remove('hidden');
-            
-            const requesterInput = document.getElementById('requesterName');
-            if (requesterInput) {
-                requesterInput.value = currentUserFullName;
-            }
-
-            await fetchMaterialList();
-            initDefaultDate();
-            
-            if (statusEl) statusEl.innerText = "";
-
-        } catch (err) {
-            console.error("Error loading user session:", err);
-            await signOut(auth);
-            localStorage.removeItem("userEmail");
-            
-            if (statusEl) {
-                statusEl.innerHTML = `
-                    <div style="margin-top: 10px;">
-                        <span style="color: #e74c3c; font-weight: bold;">เกิดข้อผิดพลาดในการตรวจสอบสิทธิ์</span><br>
-                        <button type="button" onclick="location.reload()" style="margin-top: 8px; padding: 6px 14px; background-color: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                            🔄 กดเพื่อลองใหม่อีกครั้ง
-                        </button>
-                    </div>
-                `;
-            }
+        if (statusEl) {
+            statusEl.innerHTML = `<span style="color:#27ae60;">✅ บัญชี: <b>${escapeHtml(user.email)}</b><br>⏳ กำลังเข้าสู่ระบบ...</span>`;
         }
+
+        // 1) ตรวจสอบสิทธิ์ — ถ้าเครือข่ายมีปัญหา "ห้าม signOut"
+        let checkResult = null;
+        let permissionError = null;
+        try {
+            checkResult = await verifyUserPermission(user.email);
+        } catch (err) {
+            permissionError = err;
+        }
+
+        // 2) รอให้ฟอร์ม/พรีวิวพร้อม (แยกต่างหาก เพื่อไม่ให้กระทบสถานะล็อกอิน)
+        const componentsOk = await ensureComponents();
+
+        if (permissionError) {
+            console.error("ตรวจสอบสิทธิ์ล้มเหลว — คงสถานะล็อกอินไว้:", permissionError);
+            showPermissionRetry(user.email, permissionError);
+            return;
+        }
+
+        if (!checkResult || (!checkResult.allowed && !checkResult.isAllowed)) {
+            await showDenied(user);
+            return;
+        }
+
+        if (!componentsOk) {
+            showComponentError();
+            return;
+        }
+
+        enterSystem(checkResult, user);
     } else {
         currentUserFullName = "";
-        localStorage.removeItem("userEmail");
+        safeRemoveLocalStorage("userEmail");
         if (loginSec) loginSec.classList.remove('hidden');
         if (formSec) formSec.classList.add('hidden');
         if (statusEl) statusEl.innerText = "";
-    }
-});
-
-// 📌 ฟังก์ชันช่วยโหลดคอมโพเนนต์ HTML
-async function loadComponent(elementId, filePath) {
-    try {
-        const response = await fetch(filePath);
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        const html = await response.text();
-        const el = document.getElementById(elementId);
-        if (el) el.innerHTML = html;
-    } catch (error) {
-        console.error(`Error loading ${filePath}:`, error);
+        scheduleRedirectWatchdog();
     }
 }
+
+onAuthStateChanged(auth, handleAuthState);
+
+// 📌 ตรวจจับผลลัพธ์จากการ Redirect — เรียกทุกครั้งที่เปิดเว็บ (ไม่ผูกกับการตรวจอุปกรณ์)
+getRedirectResult(auth)
+    .then((result) => {
+        if (result && result.user) {
+            console.log("✅ ล็อกอินสำเร็จผ่าน Redirect:", result.user.email);
+        }
+    })
+    .catch((error) => {
+        console.error("Redirect login error:", error);
+        displayAuthError(error);
+    });
+
+// 📌 จับกรณีกลับมาจากหน้า Google แล้ว Firebase จำ session ไม่ได้
+//    (มักเกิดจาก Safari บล็อกคุกกี้ หรือโดเมนยังไม่ได้เพิ่มใน Authorized Domains)
+let redirectWatchdogStarted = false;
+
+function scheduleRedirectWatchdog() {
+    const startedAt = getPendingLoginFlag();
+    if (!startedAt) return;
+    if (Date.now() - startedAt > 90000) { clearPendingLoginFlag(); return; }
+    if (redirectWatchdogStarted) return;
+    redirectWatchdogStarted = true;
+
+    setTimeout(() => {
+        redirectWatchdogStarted = false;
+        if (auth.currentUser) {
+            clearPendingLoginFlag();
+            return;
+        }
+        clearPendingLoginFlag();
+        const statusEl = document.getElementById('loginStatus');
+        if (statusEl) statusEl.innerText = "";
+
+        const alertEl = document.getElementById('authAlert');
+        if (!alertEl) return;
+        alertEl.style.display = 'block';
+        alertEl.style.whiteSpace = 'pre-line';
+        alertEl.innerText = (isLocalStorageUsable()
+            ? "⛔ กลับมาจากหน้า Google แล้วระบบจำสถานะล็อกอินไม่ได้\nกรุณากดปุ่มเข้าใช้งานด้วย Google อีกครั้ง\nถ้ายังไม่ผ่าน ให้ปิดหน้านี้แล้วเปิดใหม่"
+            : STORAGE_BLOCKED_MESSAGE) + "\n" + buildDiagnostics();
+    }, 8000);
+}
+
+// 📌 แจ้งเตือนทันทีหาก Safari บล็อกการเก็บข้อมูล (สาเหตุอันดับ 1 ที่ทำให้เด้งกลับหน้าล็อกอิน)
+if (!isLocalStorageUsable()) {
+    displayAuthMessage(STORAGE_BLOCKED_MESSAGE + "\n" + buildDiagnostics());
+}
+
+// 📌 Safari พากลับมาจาก OAuth ด้วย bfcache → หน้าค้างสถานะเดิม ต้องตรวจสถานะใหม่
+window.addEventListener('pageshow', (event) => {
+    if (!event.persisted) return;
+    console.log("🔄 Safari กู้หน้าจาก bfcache → ตรวจสถานะล็อกอินใหม่");
+    const statusEl = document.getElementById('loginStatus');
+    if (statusEl) statusEl.innerText = "";
+    Promise.resolve(handleAuthState(auth.currentUser)).catch(err => console.error("pageshow auth error:", err));
+});
 
 // 📌 ฟังก์ชันตั้งค่าวันที่ปัจจุบันแบบ พ.ศ. (YYYY-MM-DD)
 function initDefaultDate() {
@@ -204,22 +630,46 @@ function initDefaultDate() {
 }
 
 // ==========================================================
-// 💥 ส่วนที่ 3: จัดการข้อมูลรายการวัสดุ
+// 💥 ส่วนที่ 3: จัดการข้อมูลรายการวัสดุ (Preload + Cache เร็วระดับ 0 วิ)
 // ==========================================================
 
+// 🚀 พรีโหลดรายการวัสดุจาก Cache ทันทีที่เปิดหน้าเว็บ
+try {
+    const cachedMaterials = sessionStorage.getItem("cachedMaterialList");
+    if (cachedMaterials) {
+        globalMaterialList = JSON.parse(cachedMaterials);
+    }
+} catch (e) {
+    console.warn("Could not read material cache:", e);
+}
+
+// 🚀 ตัวแทน promise ของการดึงรายการวัสดุ (เริ่มดึงจริงหลังผู้ใช้ล็อกอินแล้ว — ดู enterSystem)
+let materialsLoadingPromise = Promise.resolve(null);
+
+function loadMaterials() {
+    materialsLoadingPromise = fetchMaterialList();
+    return materialsLoadingPromise;
+}
+
 async function fetchMaterialList(retryCount = 1, maxRetries = 3) {
-    if (retryCount === 1) {
+    // ถ้ามีข้อมูลในหน่วยความจำอยู่แล้ว ให้แสดงผลทันทีไม่ต้องรอ
+    if (globalMaterialList && globalMaterialList.length > 0) {
+        renderAllDropdowns();
+    } else if (retryCount === 1) {
         setDropdownsStatus("-- กำลังโหลดข้อมูลวัสดุ... --");
-    } else {
-        setDropdownsStatus(`-- กำลังพยายามเชื่อมต่อใหม่ (ครั้งที่ ${retryCount}/${maxRetries})... --`);
     }
 
     try {
-        const response = await fetch(APPS_SCRIPT_URL, {
+        const response = await fetchWithTimeout(APPS_SCRIPT_URL, {
             method: 'POST',
+            mode: 'cors',
+            credentials: 'omit',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: "getMaterials" })
-        });
+            body: JSON.stringify({
+                action: "getMaterials",
+                idToken: await getAuthTokenOrNull()   // 🔒 ต้องมี token จึงจะดูรายการวัสดุได้
+            })
+        }, 30000);
 
         if (!response.ok) {
             throw new Error(`HTTP Status Error: ${response.status}`);
@@ -236,32 +686,34 @@ async function fetchMaterialList(retryCount = 1, maxRetries = 3) {
 
         if (result && result.success && Array.isArray(result.data)) {
             globalMaterialList = result.data;
+            try {
+                sessionStorage.setItem("cachedMaterialList", JSON.stringify(result.data));
+            } catch (e) { }
             renderAllDropdowns();
             console.log("✅ โหลดข้อมูลวัสดุสำเร็จ");
-            return;
+            return result.data;
         } else {
             throw new Error(result ? result.message : "ไม่พบข้อมูลวัสดุ");
         }
 
     } catch (error) {
-        console.warn(`⚠️ ดึงข้อมูลวัสดุล้มเหลว ครั้งที่ ${retryCount}/${maxRetries}:`, error.message);
-
         if (retryCount < maxRetries) {
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            await new Promise(resolve => setTimeout(resolve, 300));
             return await fetchMaterialList(retryCount + 1, maxRetries);
-        } 
+        }
         else {
-            console.error("❌ พยายามเชื่อมต่อครบ 3 ครั้งแล้วไม่สำเร็จ");
+            console.error("❌ ดึงข้อมูลวัสดุไม่สำเร็จ:", error.message);
             if (globalMaterialList && globalMaterialList.length > 0) {
                 renderAllDropdowns();
-                alert("⚠️ ไม่สามารถอัปเดตรายการวัสดุล่าสุดได้ ระบบจะใช้ข้อมูลรายการเดิมชั่วคราวครับ");
             } else {
                 setDropdownsStatus("-- การเชื่อมต่อขัดข้อง (กดที่นี่เพื่อลองใหม่) --");
-                alert("⛔ ไม่สามารถดึงข้อมูลรายการวัสดุได้หลังจากพยายาม 3 ครั้ง\nกรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต แล้วลองใหม่อีกครั้งครับ");
             }
         }
     }
 }
+
+// 📌 ผูกขึ้น global เพื่อให้ปุ่ม "กดที่นี่เพื่อลองใหม่" ใน dropdown ใช้งานได้ (inline onclick)
+window.fetchMaterialList = fetchMaterialList;
 
 function setDropdownsStatus(message) {
     const selectElements = document.querySelectorAll('.item-name');
@@ -277,20 +729,20 @@ function renderAllDropdowns() {
     });
 }
 
-window.updateMaterialDropdown = function(selectElement) {
+window.updateMaterialDropdown = function (selectElement) {
     if (!selectElement) return;
-    
+
     selectElement.innerHTML = `<option value="">-- เลือกรายการวัสดุสำนักงาน --</option>`;
     if (globalMaterialList && globalMaterialList.length > 0) {
         globalMaterialList.forEach(mat => {
             const opt = document.createElement('option');
             opt.value = mat.name;
-            opt.text = `${mat.code} - ${mat.name} (คงเหลือ: ${mat.stock} ${mat.unit})`; 
-            
+            opt.text = `${mat.code} - ${mat.name} (คงเหลือ: ${mat.stock} ${mat.unit})`;
+
             opt.setAttribute('data-code', mat.code);
             opt.setAttribute('data-unit', mat.unit);
             opt.setAttribute('data-stock', mat.stock);
-            
+
             if (mat.stock <= 0) {
                 opt.style.color = "red";
             }
@@ -301,18 +753,18 @@ window.updateMaterialDropdown = function(selectElement) {
     }
 };
 
-window.onMaterialChange = function(selectEl) {
+window.onMaterialChange = function (selectEl) {
     const row = selectEl.closest('tr');
     if (!row) return;
-    
+
     const selectedOption = selectEl.options[selectEl.selectedIndex];
     const codeInput = row.querySelector('.item-code');
     const unitInput = row.querySelector('.item-unit');
     const qtyInput = row.querySelector('.item-qty');
-    
+
     if (selectedOption && selectEl.value !== "") {
         const currentStock = Number(selectedOption.getAttribute('data-stock') || 0);
-        
+
         if (currentStock <= 0) {
             alert(`❌ รายการวัสดุนี้หมดคลังแล้วครับ (คงเหลือ 0) ไม่สามารถเลือกเบิกได้ครับ`);
             selectEl.value = "";
@@ -323,7 +775,7 @@ window.onMaterialChange = function(selectEl) {
 
         if (codeInput) codeInput.value = selectedOption.getAttribute('data-code') || "-";
         if (unitInput) unitInput.value = selectedOption.getAttribute('data-unit') || "-";
-        
+
         if (qtyInput) {
             qtyInput.oninput = () => checkQuantityLimit(qtyInput);
         }
@@ -333,25 +785,34 @@ window.onMaterialChange = function(selectEl) {
     }
 };
 
-window.checkQuantityLimit = function(inputEl) {
+window.checkQuantityLimit = function (inputEl) {
     const row = inputEl.closest('tr');
     if (!row) return;
-    
+
     const selectEl = row.querySelector('select');
     if (!selectEl) return;
-    
+
     const selectedOption = selectEl.options[selectEl.selectedIndex];
     if (!selectedOption || selectEl.value === "") return;
-    
+
     const maxStock = Number(selectedOption.getAttribute('data-stock') || 0);
-    const enteredQty = Number(inputEl.value || 0);
-    
+    let enteredQty = Number(inputEl.value || 0);
+
     if (enteredQty <= 0 && inputEl.value !== "") {
         alert("❌ กรุณากรอกจำนวนเบิกให้มากกว่า 0 ครับ");
         inputEl.value = "";
         return;
     }
-    
+
+    // 🟢 จำนวนเบิกต้องเป็นจำนวนเต็ม (เซิร์ฟเวอร์ปฏิเสธทศนิยม เพื่อไม่ให้สต็อกเพี้ยน)
+    if (isFinite(enteredQty) && enteredQty !== Math.floor(enteredQty)) {
+        const floored = Math.floor(enteredQty);
+        enteredQty = floored;
+        inputEl.value = floored > 0 ? floored : "";
+        alert("ℹ️ จำนวนเบิกต้องเป็นจำนวนเต็ม ระบบปรับให้เป็น " + (floored > 0 ? floored : 0) + " แล้วครับ");
+        if (floored <= 0) return;
+    }
+
     if (enteredQty > maxStock) {
         alert(`❌ ไม่สามารถเบิกได้เนื่องจากจำนวนสินค้าไม่พอ\n(วัสดุชิ้นนี้คงเหลือในคลังเพียง ${maxStock} เท่านั้น)`);
         inputEl.value = maxStock;
@@ -396,21 +857,19 @@ export function reprintFromHistory(rawJson) {
                 return item;
             });
         }
-        
+
         // แมปข้อมูลลง A4 Preview
         mapDataToA4Preview(formData);
 
         // ปิด Modal ประวัติ
         closeHistoryModal();
-        
+
         const formSec = document.getElementById('formSection');
         const previewSec = document.getElementById('previewSection');
         const postSaveActions = document.getElementById('postSaveActions');
-        const printActionButtons = document.getElementById('printActionButtons');
 
         if (formSec) formSec.classList.add('hidden');
         if (previewSec) previewSec.classList.remove('hidden');
-        if (printActionButtons) printActionButtons.classList.add('hidden');
 
         if (postSaveActions) {
             postSaveActions.style.display = 'flex';
@@ -430,11 +889,11 @@ window.reprintFromHistory = reprintFromHistory;
 // 💥 ส่วนที่ 4: การเพิ่ม/ลบ แถวในตาราง
 // ==========================================================
 
-window.addNewRow = function() {
+window.addNewRow = function () {
     const tbody = document.getElementById('itemsTableBody');
     if (!tbody) return;
 
-    // 🟢 ตรวจสอบไม่ให้เพิ่มเกิน 11 รายการ
+    // 🟢 ตรวจสอบไม่ให้เพิ่มเกิน 8 รายการ
     if (tbody.rows.length >= 8) {
         alert("⚠️ จำกัดการเบิกสูงสุดไม่เกิน 8 รายการต่อ 1 ใบเบิก ");
         return;
@@ -447,29 +906,56 @@ window.addNewRow = function() {
         <td>
             <select class="item-name" style="width:100%; padding:8px; border-radius:6px; border:1px solid #BDC3C7;" required onchange="onMaterialChange(this)"></select>
         </td>
-        <td><input type="number" class="item-qty" min="1" required placeholder="0"></td>
-        <td><input type="text" class="item-unit" required readonly placeholder="หน่วยนับ" style="background-color: #f3f4f6;"></td>
-        <td><input type="text" class="item-code" readonly placeholder="รหัสวัสดุ" style="background-color: #f3f4f6;"></td>
-        <td><input type="text" class="item-req-no" value="800000"></td>
-        <td><input type="text" class="item-pay-no" value="490000"></td>
+        <td><input type="number" class="item-qty" min="1" step="1" required placeholder="0"></td>
+        <td><input type="text" class="item-unit" required readonly placeholder="หน่วยนับ" style="background-color: #F0F7F4;"></td>
+        <td><input type="text" class="item-code" readonly placeholder="รหัสวัสดุ" style="background-color: #F0F7F4;"></td>
+        <td><input type="text" class="item-req-no" value="800000" readonly
+                style="background-color: #F0F7F4; color: #64857D; cursor: not-allowed;"></td>
+        <td><input type="text" class="item-pay-no" value="490000" readonly
+                style="background-color: #F0F7F4; color: #64857D; cursor: not-allowed;"></td>
         <td style="text-align: center;"><button type="button" class="btn-delete-row" onclick="deleteRow(this)">❌</button></td>
     `;
     tbody.appendChild(tr);
-    
+
     const newSelect = tr.querySelector('.item-name');
     updateMaterialDropdown(newSelect);
+    syncReqPayInputs();
 };
 
-window.deleteRow = function(button) {
+window.deleteRow = function (button) {
     const row = button.closest('tr');
     const tbody = row.parentNode;
     if (tbody.rows.length > 1) {
         row.remove();
         reIndexRows();
+        syncReqPayInputs();
     } else {
         alert("ต้องมีรายการวัสดุอย่างน้อย 1 รายการครับ");
     }
 };
+
+// 🟢 ปลดล็อกให้กรอกได้เฉพาะ "แถวที่ 1" ส่วนแถวที่ 2 ขึ้นไปปิดการกรอก (เหมือนหน่วยงาน/แหล่งเงิน)
+function syncReqPayInputs() {
+    const rows = document.querySelectorAll('#itemsTableBody tr');
+    rows.forEach((row, index) => {
+        const isLocked = index > 0;
+        ['.item-req-no', '.item-pay-no'].forEach(selector => {
+            const input = row.querySelector(selector);
+            if (!input) return;
+
+            input.readOnly = isLocked;
+            if (isLocked) {
+                input.style.backgroundColor = '#F2F4F4';
+                input.style.color = '#7F8C8D';
+                input.style.cursor = 'not-allowed';
+            } else {
+                input.style.backgroundColor = '';
+                input.style.color = '';
+                input.style.cursor = '';
+            }
+        });
+    });
+}
 
 function reIndexRows() {
     const rows = document.querySelectorAll('#itemsTableBody tr');
@@ -486,27 +972,39 @@ function reIndexRows() {
 // 💥 ส่วนที่ 5: จัดการ Form Submission & Save to Google Sheets
 // ==========================================================
 
-window.handleFormSubmit = async function(actionType) {
-    if (window.event) window.event.preventDefault();
-    
+window.handleFormSubmit = async function (actionType) {
+    if (window.event && typeof window.event.preventDefault === 'function') window.event.preventDefault();
+
+    // 📋 ตรวจความถูกต้องของฟอร์มก่อนเสมอ (required / min / วันที่)
+    const materialForm = document.getElementById('materialForm');
+    if (materialForm && typeof materialForm.reportValidity === 'function' && !materialForm.reportValidity()) {
+        return;
+    }
+
     const items = [];
     const rows = document.querySelectorAll('#itemsTableBody tr');
     let hasError = false;
+    let qtyError = false;
 
     rows.forEach(row => {
         const nameSelect = row.querySelector('.item-name');
         const name = nameSelect ? nameSelect.value.trim() : '';
-        const qty = row.querySelector('.item-qty') ? row.querySelector('.item-qty').value.trim() : '0';
+        const qty = row.querySelector('.item-qty') ? row.querySelector('.item-qty').value.trim() : '';
         const unit = row.querySelector('.item-unit') ? row.querySelector('.item-unit').value.trim() : '';
         const code = row.querySelector('.item-code') ? row.querySelector('.item-code').value.trim() : '-';
-        
+
         let reqNoValue = row.querySelector('.item-req-no') ? row.querySelector('.item-req-no').value.trim() : '';
         let payNoValue = row.querySelector('.item-pay-no') ? row.querySelector('.item-pay-no').value.trim() : '';
-        
+
         let reqNo = (reqNoValue === "" || reqNoValue === "800000") ? "800000..............." : reqNoValue;
         let payNo = (payNoValue === "" || payNoValue === "490000") ? "490000..............." : payNoValue;
-        
+
         if (name !== "") {
+            const qtyNum = Number(qty);
+            if (qty === "" || !isFinite(qtyNum) || qtyNum < 1) {
+                qtyError = true;
+                return;
+            }
             items.push({
                 index: row.querySelector('.row-index') ? row.querySelector('.row-index').innerText : '',
                 name: name,
@@ -525,13 +1023,20 @@ window.handleFormSubmit = async function(actionType) {
         alert("กรุณาเลือกรายการวัสดุให้ครบถ้วนก่อนดำเนินการครับ");
         return;
     }
-    // 🟢 เพิ่มการตรวจสอบไม่ให้เกิน 11 รายการก่อน บันทึก/พรีวิว
-if (items.length > 8) {
-    alert("⚠️ ระบบจำกัดการเบิกได้ไม่เกิน 8 รายการต่อ 1 ใบเบิกครับ\nกรุณาลบรายการออกให้เหลือไม่เกิน 8 รายการ");
-    return;
-}
 
-    const rawDate = document.getElementById('docDate') ? document.getElementById('docDate').value : ''; 
+    // 🟢 จำนวนเบิกต้องมากกว่า 0 ทุกแถว
+    if (qtyError) {
+        alert("⚠️ กรุณากรอกจำนวนเบิกของทุกรายการให้มากกว่า 0 ก่อนบันทึกครับ");
+        return;
+    }
+
+    // 🟢 จำกัดไม่ให้เกิน 8 รายการต่อ 1 ใบเบิก
+    if (items.length > 8) {
+        alert("⚠️ ระบบจำกัดการเบิกได้ไม่เกิน 8 รายการต่อ 1 ใบเบิกครับ\nกรุณาลบรายการออกให้เหลือไม่เกิน 8 รายการ");
+        return;
+    }
+
+    const rawDate = document.getElementById('docDate') ? document.getElementById('docDate').value : '';
     let formattedBEData = rawDate;
     if (rawDate) {
         const dateParts = rawDate.split('-');
@@ -544,9 +1049,9 @@ if (items.length > 8) {
 
     const formData = {
         organization: document.getElementById('organization')?.value.trim() || '-',
-        docDate: formattedBEData, 
+        docDate: formattedBEData,
         moneySource: document.getElementById('moneySource')?.value.trim() || '-',
-        items: items, 
+        items: items,
         requesterName: document.getElementById('requesterName')?.value.trim() || currentUserFullName || '-',
         supplyHeadName: document.getElementById('supplyHeadName')?.value.trim() || '-',
         approverName: "..........................................................",
@@ -556,64 +1061,111 @@ if (items.length > 8) {
 
     if (actionType === 'preview') {
         mapDataToA4Preview(formData);
-        
+
         const previewSec = document.getElementById('previewSection');
-        const printActionButtons = document.getElementById('printActionButtons');
         const postSaveActions = document.getElementById('postSaveActions');
 
         if (previewSec) previewSec.classList.remove('hidden');
-        
-        if (printActionButtons) printActionButtons.classList.remove('hidden');
+
         if (postSaveActions) {
             postSaveActions.style.display = 'none';
             postSaveActions.classList.add('hidden');
         }
-        
+
         if (previewSec) previewSec.scrollIntoView({ behavior: 'smooth' });
     }
     else if (actionType === 'save') {
         const loading = document.getElementById('loadingOverlay');
         if (loading) loading.classList.remove('hidden');
+        setActionButtonsDisabled(true);
 
-        // ดึง Email ของผู้ใช้งานปัจจุบัน
-        const currentUserEmail = auth.currentUser ? auth.currentUser.email : (localStorage.getItem("userEmail") || '');
+        // 🔒 กันบันทึกซ้ำ: ถ้าเป็นข้อมูลชุดเดิมที่เพิ่งส่งไม่สำเร็จ (เน็ตหลุด/ตอบกลับช้า)
+        //    ให้ใช้ requestId เดิม เซิร์ฟเวอร์จะรู้ว่าเคยบันทึกแล้วและไม่ตัดสต็อกรอบสอง
+        const fingerprint = JSON.stringify(formData);
+        if (pendingSaveFingerprint !== fingerprint) {
+            pendingSaveFingerprint = fingerprint;
+            pendingSaveRequestId = newRequestId();
+        }
+        const requestId = pendingSaveRequestId;
+
+        // ดึง Email + ID token ของผู้ใช้งานปัจจุบัน (token ใช้ยืนยันตัวตนฝั่งเซิร์ฟเวอร์)
+        const currentUserEmail = auth.currentUser ? auth.currentUser.email : (safeGetLocalStorage("userEmail") || '');
+        let idToken = null;
+        try { idToken = await getAuthTokenOrNull(); } catch (e) { idToken = null; }
 
         try {
-            const response = await fetch(APPS_SCRIPT_URL, {
+            const response = await fetchWithTimeout(APPS_SCRIPT_URL, {
                 method: 'POST',
+                mode: 'cors',
+                credentials: 'omit',
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ 
-                    action: "saveData", 
+                body: JSON.stringify({
+                    action: "saveData",
                     formData: formData,
-                    userEmail: currentUserEmail 
+                    userEmail: currentUserEmail,
+                    idToken: idToken,
+                    requestId: requestId
                 })
-            });
+            }, 60000);
+
+            if (!response.ok) {
+                throw new Error("เซิร์ฟเวอร์ตอบกลับ HTTP " + response.status);
+            }
 
             const responseText = await response.text();
+            if (responseText.trim().startsWith("<")) {
+                throw new Error("Google Apps Script ตอบกลับเป็น HTML ชั่วคราว");
+            }
+
             let result;
             try {
                 result = JSON.parse(responseText);
             } catch (e) {
-                result = { success: true }; 
+                throw new Error("รูปแบบข้อมูลตอบกลับจากเซิร์ฟเวอร์ผิดปกติ");
             }
 
+            if (!result || result.success !== true) {
+                throw new Error((result && result.message) || "เซิร์ฟเวอร์ไม่ยืนยันว่าบันทึกข้อมูลสำเร็จ");
+            }
+
+            // ✅ ยืนยันว่าบันทึกสำเร็จจริงเท่านั้น จึงแสดง popup สำเร็จ
+            pendingSaveFingerprint = "";
+            pendingSaveRequestId = "";
+
             mapDataToA4Preview(formData);
-            await fetchMaterialList(); 
-            
-            showSuccessPopup();
+            await fetchMaterialList();
+
+            showSuccessPopup(result);
 
         } catch (error) {
+            // ❌ บันทึกไม่สำเร็จ → ห้ามขึ้น "บันทึกสำเร็จ" และคงข้อมูลฟอร์มไว้ให้ลองใหม่
             console.error("Save error:", error);
-            mapDataToA4Preview(formData);
-            showSuccessPopup();
+            showSaveError(error);
         } finally {
+            setActionButtonsDisabled(false);
             if (loading) loading.classList.add('hidden');
         }
     }
 };
 
-// ==========================================================
-// 💥 ส่วนที่ 6: Mapping เอกสาร A4 & Helper Functions
+// 📌 ปิด/เปิดปุ่มตัวอย่าง-บันทึก ระหว่างมีคำขอค้างอยู่ (กันกดซ้ำ)
+function setActionButtonsDisabled(disabled) {
+    const buttons = document.querySelectorAll('button[onclick*="handleFormSubmit"]');
+    buttons.forEach(btn => {
+        btn.disabled = disabled;
+        btn.style.opacity = disabled ? '0.6' : '';
+        btn.style.cursor = disabled ? 'not-allowed' : 'pointer';
+    });
+}
+
+// 📌 แจ้งเตือนเมื่อบันทึกล้มเหลว — คงข้อมูลฟอร์มไว้ให้ผู้ใช้แก้แล้วลองใหม่
+function showSaveError(error) {
+    const detail = String((error && error.message) || error);
+    alert("❌ บันทึกข้อมูลไม่สำเร็จ\n\nเหตุผล: " + detail +
+        "\n\nข้อมูลในฟอร์มยังคงอยู่ กดปุ่มบันทึกได้อีกครั้งเมื่อพร้อม\n" +
+        buildDiagnostics());
+}
+
 // ==========================================================
 
 function mapDataToA4Preview(data) {
@@ -624,7 +1176,7 @@ function mapDataToA4Preview(data) {
         moneySourceEl.innerText = data.moneySource || "-";
         moneySourceEl.parentElement.style.borderBottom = (data.moneySource && data.moneySource !== "-") ? "none" : "1px dotted #000";
     }
-    
+
     const orgEl = document.getElementById('viewOrganization');
     if (orgEl) {
         orgEl.innerText = data.organization || "-";
@@ -636,7 +1188,7 @@ function mapDataToA4Preview(data) {
         docDateEl.innerText = data.docDate;
         docDateEl.parentElement.style.borderBottom = (data.docDate && data.docDate !== "-") ? "none" : "1px dotted #000";
     }
-    
+
     if (document.getElementById('viewRequesterName')) document.getElementById('viewRequesterName').innerText = data.requesterName || "-";
     if (document.getElementById('viewSupplyHeadName')) document.getElementById('viewSupplyHeadName').innerText = data.supplyHeadName || "-";
     if (document.getElementById('viewApproverName')) document.getElementById('viewApproverName').innerText = data.approverName || "..........................................................";
@@ -648,15 +1200,17 @@ function mapDataToA4Preview(data) {
         tbody.innerHTML = "";
         if (Array.isArray(data.items)) {
             data.items.forEach((item, index) => {
+                // 🟢 แสดงเลขที่ใบเบิก/ใบสั่งจ่าย เฉพาะรายการที่ 1 เท่านั้น (แถวอื่นเว้นว่าง)
+                const isFirstRow = index === 0;
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-                    <td class="center-text">${item.index || (index + 1)}</td>
-                    <td>${item.name || "-"}</td>
-                    <td class="center-text">${item.qty || "1"}</td>
-                    <td class="center-text">${item.unit || "-"}</td>
-                    <td class="center-text">${item.code || "-"}</td>
-                    <td class="center-text">${item.reqNo || "800000..............."}</td>
-                    <td class="center-text">${item.payNo || "490000..............."}</td>
+                    <td class="center-text">${escapeHtml(item.index || (index + 1))}</td>
+                    <td>${escapeHtml(item.name || "-")}</td>
+                    <td class="center-text">${escapeHtml(item.qty || "1")}</td>
+                    <td class="center-text">${escapeHtml(item.unit || "-")}</td>
+                    <td class="center-text">${escapeHtml(item.code || "-")}</td>
+                    <td class="center-text">${escapeHtml(isFirstRow ? (item.reqNo || "800000...............") : "")}</td>
+                    <td class="center-text">${escapeHtml(isFirstRow ? (item.payNo || "490000...............") : "")}</td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -665,16 +1219,35 @@ function mapDataToA4Preview(data) {
 }
 window.mapDataToA4Preview = mapDataToA4Preview;
 
-function showSuccessPopup() {
+function showSuccessPopup(result) {
     const popup = document.getElementById('successPopup');
-    if (popup) {
-        popup.classList.remove('hidden');
-        popup.classList.remove('popup-hidden');
-        popup.style.display = 'flex';
+    if (!popup) return;
+
+    // 🟢 เดิมไม่แสดงผลลัพธ์การส่งอีเมลเลย ผู้ใช้จึงไม่รู้ว่าตัวเองไม่ได้รับไฟล์ PDF
+    const noteEl = document.getElementById('successNote');
+    if (noteEl) {
+        const res = result || {};
+        if (res.duplicate === true) {
+            noteEl.style.color = '#C2761A';
+            noteEl.innerText = 'ℹ️ รายการนี้เคยบันทึกเข้าระบบแล้ว ระบบไม่ตัดสต็อกซ้ำให้อีก';
+        } else if (res.emailStatus && /ไม่สำเร็จ/.test(String(res.emailStatus))) {
+            noteEl.style.color = '#C43D3D';
+            noteEl.innerText = '⚠️ ข้อมูลถูกบันทึกแล้ว แต่ส่งอีเมลไม่สำเร็จ\n' + res.emailStatus +
+                '\nกรุณากด "บันทึกเป็นไฟล์ PDF" เพื่อเก็บเอกสารไว้เอง';
+        } else if (res.emailStatus) {
+            noteEl.style.color = '#0B8F70';
+            noteEl.innerText = '📧 ' + res.emailStatus;
+        } else {
+            noteEl.innerText = '';
+        }
     }
+
+    popup.classList.remove('hidden');
+    popup.classList.remove('popup-hidden');
+    popup.style.display = 'flex';
 }
 
-window.closePopupAndGoToPrint = function() {
+window.closePopupAndGoToPrint = function () {
     const popup = document.getElementById('successPopup');
     if (popup) {
         popup.classList.add('hidden');
@@ -696,12 +1269,12 @@ window.closePopupAndGoToPrint = function() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
 };
 
-window.backToForm = async function() {
+window.backToForm = async function () {
     const previewSec = document.getElementById('previewSection');
     const formSec = document.getElementById('formSection');
 
     if (previewSec) previewSec.classList.add('hidden');
-    
+
     const postSaveActions = document.getElementById('postSaveActions');
     if (postSaveActions) {
         postSaveActions.style.display = 'none';
@@ -720,10 +1293,10 @@ window.backToForm = async function() {
     }
 };
 
-window.resetForm = function() {
+window.resetForm = function () {
     const form = document.getElementById('materialForm');
     if (form) form.reset();
-    
+
     const tbody = document.getElementById('itemsTableBody');
     if (tbody) {
         tbody.innerHTML = `
@@ -734,20 +1307,21 @@ window.resetForm = function() {
                         <option value="">-- เลือกรายการวัสดุ --</option>
                     </select>
                 </td>
-                <td><input type="number" class="item-qty" min="1" required placeholder="0"></td>
-                <td><input type="text" class="item-unit" required readonly placeholder="หน่วยนับ" style="background-color: #f3f4f6;"></td>
-                <td><input type="text" class="item-code" readonly placeholder="รหัสวัสดุ" style="background-color: #f3f4f6;"></td>
+                <td><input type="number" class="item-qty" min="1" step="1" required placeholder="0"></td>
+                <td><input type="text" class="item-unit" required readonly placeholder="หน่วยนับ" style="background-color: #F0F7F4;"></td>
+                <td><input type="text" class="item-code" readonly placeholder="รหัสวัสดุ" style="background-color: #F0F7F4;"></td>
                 <td><input type="text" class="item-req-no" value="800000"></td>
                 <td><input type="text" class="item-pay-no" value="490000"></td>
                 <td style="text-align: center;"><button type="button" class="btn-delete-row" onclick="deleteRow(this)">❌</button></td>
             </tr>
         `;
     }
-    
+
     rowCount = 1;
     const firstSelect = document.getElementById('itemSelect1');
     if (firstSelect) updateMaterialDropdown(firstSelect);
-    
+    syncReqPayInputs();
+
     initDefaultDate();
 
     const requesterInput = document.getElementById('requesterName');
@@ -760,21 +1334,20 @@ window.resetForm = function() {
 //     window.print();
 // };
 
-window.openDriveFolder = function() {
-    const pdfFileId = "1qsFQ01jGrgofyYvxxxrJ6rOPYJyoIZBW"; 
-    const driveUrl = "https://drive.google.com/file/d/" + pdfFileId + "/preview";
-    
+window.openDriveFolder = function () {
+    const localUrl = "./image/รายการวัสดุสำนักงาน.pdf";
+
     const iframe = document.getElementById('driveIframe');
     const modal = document.getElementById('driveModal');
-    
-    if (iframe) iframe.src = driveUrl;
+
+    if (iframe) iframe.src = localUrl;
     if (modal) modal.style.display = 'flex';
 };
 
-window.closeDriveModal = function() {
+window.closeDriveModal = function () {
     const modal = document.getElementById('driveModal');
     const iframe = document.getElementById('driveIframe');
-    
+
     if (modal) modal.style.display = 'none';
     if (iframe) iframe.src = '';
 };
@@ -783,7 +1356,7 @@ window.closeDriveModal = function() {
 // 📄 ฟังก์ชันแปลงเอกสาร A4 เป็น PDF (บังคับ 1 หน้าพอดี)
 // ==========================================================
 
-window.exportToPDF = async function() {
+window.exportToPDF = async function () {
     const element = document.getElementById('previewSection');
 
     if (!element) {
@@ -797,29 +1370,34 @@ window.exportToPDF = async function() {
     const loading = document.getElementById('loadingOverlay');
     if (loading) loading.classList.remove('hidden');
 
+    // 🟢 ตั้งชื่อไฟล์ตาม "วันที่ในเอกสาร" ถ้ามี (เดิมใช้วันที่เครื่อง ทำให้ไฟล์หลายใบชื่อซ้ำกัน)
+    const docDateEl = document.getElementById('viewDocDate');
+    const docDateText = docDateEl ? String(docDateEl.innerText || '').trim() : '';
     const today = new Date();
-    const dateString = `${today.getFullYear()}-${today.getMonth() + 1}-${today.getDate()}`;
+    const dateString = (docDateText && docDateText !== '-')
+        ? docDateText.replace(/\//g, '-')
+        : `${today.getFullYear()}-${today.getMonth() + 1}-${today.getDate()}`;
     const fileName = `ใบเบิกวัสดุ_${dateString}.pdf`;
 
     // 🟢 เพิ่ม Class กระชับพื้นที่สำหรับจับภาพเป็น PDF
     element.classList.add('pdf-print-fit');
 
     const opt = {
-        margin:       0, // 🟢 ตั้งขอบ PDF เป็น 0 เพราะคุมด้วย padding ใน CSS แทนแล้ว
-        filename:     fileName,
-        image:        { type: 'jpeg', quality: 0.98 },
-        html2canvas:  { 
+        margin: 0, // 🟢 ตั้งขอบ PDF เป็น 0 เพราะคุมด้วย padding ใน CSS แทนแล้ว
+        filename: fileName,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: {
             scale: 2,
             useCORS: true,
             logging: false,
             scrollY: 0
         },
-        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
 
     try {
-        // รอ 0.25 วินาทีให้สไตล์ CSS ปรับเปลี่ยน
-        await new Promise(resolve => setTimeout(resolve, 250));
+        // รอ 0.5 วินาทีให้สไตล์ CSS ปรับเปลี่ยน
+        await new Promise(resolve => setTimeout(resolve, 500));
         await html2pdf().set(opt).from(element).save();
 
     } catch (err) {
@@ -842,102 +1420,113 @@ window.exportToPDF = async function() {
  * 📜 เปิด Modal และดึงข้อมูลประวัติย้อนหลัง (กรองเฉพาะ User ปัจจุบันเท่านั้น)
  */
 export async function openHistoryModal() {
-  const modal = document.getElementById("historyModal");
-  const tableBody = document.getElementById("historyTableBody");
-  
-  if (!modal || !tableBody) return;
+    const modal = document.getElementById("historyModal");
+    const tableBody = document.getElementById("historyTableBody");
 
-  // 1. เปิดแสดง Modal และขึ้นสถานะกำลังโหลด
-  modal.classList.remove("hidden");
-  tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center;">⌛ กำลังโหลดข้อมูลประวัติ...</td></tr>`;
+    if (!modal || !tableBody) return;
 
-  // 2. ดึงอีเมลผู้ใช้งานปัจจุบันที่ล็อกอินอยู่
-  const currentUserEmail = auth.currentUser ? auth.currentUser.email : (localStorage.getItem("userEmail") || ""); 
+    // 1. เปิดแสดง Modal และขึ้นสถานะกำลังโหลด
+    modal.classList.remove("hidden");
+    tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center;">⌛ กำลังโหลดข้อมูลประวัติ...</td></tr>`;
 
-  if (!currentUserEmail) {
-    tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#e67e22;">⚠️ กรุณาล็อกอินเข้าสู่ระบบก่อนดึงประวัติการเบิก</td></tr>`;
-    return;
-  }
+    // 2. ดึงอีเมลผู้ใช้งานปัจจุบันที่ล็อกอินอยู่
+    const currentUserEmail = auth.currentUser ? auth.currentUser.email : (safeGetLocalStorage("userEmail") || "");
 
-  try {
-    // 3. ส่งคำขอแบบ POST ไปยัง Google Apps Script พร้อมส่ง Email ไปกรอง
-    const response = await fetch(APPS_SCRIPT_URL, {
-      method: "POST",
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({
-        action: "getUserHistory",
-        email: currentUserEmail.trim().toLowerCase() // ส่ง Email เป็นอักษรตัวเล็กทั้งหมด
-      })
-    });
+    if (!currentUserEmail) {
+        tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#C2761A;">⚠️ กรุณาล็อกอินเข้าสู่ระบบก่อนดึงประวัติการเบิก</td></tr>`;
+        return;
+    }
 
-    const textData = await response.text();
-    const result = JSON.parse(textData);
+    try {
+        // 3. ส่งคำขอแบบ POST ไปยัง Google Apps Script พร้อมส่ง Email ไปกรอง
+        const response = await fetchWithTimeout(APPS_SCRIPT_URL, {
+            method: "POST",
+            mode: "cors",
+            credentials: "omit",
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+                action: "getUserHistory",
+                email: currentUserEmail.trim().toLowerCase(), // ส่ง Email เป็นอักษรตัวเล็กทั้งหมด
+                idToken: await getAuthTokenOrNull()          // ใช้ยืนยันตัวตนจริงฝั่งเซิร์ฟเวอร์
+            })
+        }, 30000);
 
-    if (result.success && Array.isArray(result.data)) {
-      // 🛡️ Client-side Double Security Filter: กรองเฉพาะรายการที่ตรงกับ Email ของผู้ใช้ปัจจุบันเท่านั้น
-      const myHistoryList = result.data.filter(item => {
-        const itemEmail = (item.userEmail || item.email || "").trim().toLowerCase();
-        return itemEmail === currentUserEmail.trim().toLowerCase();
-      });
+        const textData = await response.text();
+        const result = JSON.parse(textData);
 
-      // 4. ตรวจสอบว่ามีรายการย้อนหลังเฉพาะของ User นี้หรือไม่
-      if (myHistoryList.length > 0) {
-        tableBody.innerHTML = "";
-        myHistoryList.forEach((item, index) => {
-          const tr = document.createElement('tr');
-          tr.innerHTML = `
+        if (result.success && Array.isArray(result.data)) {
+            // 🛡️ Client-side Double Security Filter: กรองเฉพาะรายการที่ตรงกับ Email ของผู้ใช้ปัจจุบันเท่านั้น
+            const myHistoryList = result.data.filter(item => {
+                const itemEmail = (item.userEmail || item.email || "").trim().toLowerCase();
+                return itemEmail === currentUserEmail.trim().toLowerCase();
+            });
+
+            // 4. ตรวจสอบว่ามีรายการย้อนหลังเฉพาะของ User นี้หรือไม่
+            if (myHistoryList.length > 0) {
+                tableBody.innerHTML = "";
+                myHistoryList.forEach((item, index) => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
             <td style="text-align:center;">${index + 1}</td>
-            <td style="text-align:center;">${item.docDate || "-"}</td>
-            <td style="text-align:center;">${item.saveTime || "-"}</td>
+            <td style="text-align:center;">${escapeHtml(item.docDate || "-")}</td>
+            <td style="text-align:center;">${escapeHtml(item.saveTime || "-")}</td>
             <td style="text-align:center;">
               <button type="button" class="btn-history-print" 
-                      style="padding: 5px 12px; background-color: #27ae60; color: white; border: none; border-radius: 6px; font-size: 0.85rem; font-weight: 500; cursor: pointer; transition: 0.2s;">
+                      style="padding: 6px 14px; background: linear-gradient(135deg, #16C79A, #0B8F70); color: white; border: none; border-radius: 999px; font-size: 0.85rem; font-weight: 500; cursor: pointer; transition: transform 0.2s ease, box-shadow 0.2s ease; box-shadow: 0 10px 18px -14px rgba(11,143,112,.95);">
                 📄 ดู/พิมพ์ (${item.itemCount || 0} รายการ)
               </button>
             </td>
           `;
-          
-          // ผูก Event ปุ่มกดพิมพ์ย้อนหลัง
-          const printBtn = tr.querySelector('.btn-history-print');
-          if (printBtn) {
-            printBtn.onclick = () => {
-              let jsonData = item.rawJson || item.formData;
 
-              if (!jsonData) {
-                console.error("Data missing for item:", item);
-                alert("ไม่พบข้อมูลเอกสารย้อนหลังฉบับนี้ครับ กรุณาตรวจสอบการบันทึกข้อมูลใน Google Sheets");
-                return;
-              }
+                    // ผูก Event ปุ่มกดพิมพ์ย้อนหลัง
+                    const printBtn = tr.querySelector('.btn-history-print');
+                    if (printBtn) {
+                        printBtn.onclick = () => {
+                            let jsonData = item.rawJson || item.formData;
 
-              reprintFromHistory(jsonData);
-            };
-          }
+                            if (!jsonData) {
+                                console.error("Data missing for item:", item);
+                                alert("ไม่พบข้อมูลเอกสารย้อนหลังฉบับนี้ครับ กรุณาตรวจสอบการบันทึกข้อมูลใน Google Sheets");
+                                return;
+                            }
 
-          tableBody.appendChild(tr);
-        });
-      } else {
-        // หากไม่มีรายการของ User นี้
-        tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#888;">ไม่พบประวัติการบันทึกย้อนหลังของบัญชีนี้ (${currentUserEmail})</td></tr>`;
-      }
-    } else {
-      tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#888;">ไม่พบประวัติการบันทึกย้อนหลังของบัญชีนี้ (${currentUserEmail})</td></tr>`;
+                            reprintFromHistory(jsonData);
+                        };
+                    }
+
+                    tableBody.appendChild(tr);
+                });
+            } else {
+                // ไม่มีรายการของ User นี้
+                tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#6B8B83;">ไม่พบประวัติการบันทึกย้อนหลังของบัญชีนี้ (${escapeHtml(currentUserEmail)})</td></tr>`;
+            }
+        } else {
+            // ⚠️ เซิร์ฟเวอร์ตอบ success:false → ต้องบอกสาเหตุจริง (เช่น ยืนยันตัวตนไม่ผ่าน)
+            //    ห้ามกลบเป็น “ไม่พบประวัติ” เพราะจะทำให้เข้าใจผิดว่ายังไม่เคยเบิก
+            const serverMsg = (result && result.message)
+                ? String(result.message)
+                : "เซิร์ฟเวอร์ไม่ตอบกลับข้อมูลประวัติ";
+            tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#C43D3D; white-space:pre-line;">⚠️ ${escapeHtml(serverMsg)}</td></tr>`;
+        }
+    } catch (error) {
+        console.error("Error fetching history:", error);
+        tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:red;">เกิดข้อผิดพลาดในการโหลดข้อมูลประวัติ<br><span style="font-size:0.85rem;">${escapeHtml(String((error && error.message) || error))}</span></td></tr>`;
     }
-  } catch (error) {
-    console.error("Error fetching history:", error);
-    tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:red;">เกิดข้อผิดพลาดในการโหลดข้อมูลประวัติ</td></tr>`;
-  }
 }
 
 /**
  * ❌ ปิด Modal ประวัติ
  */
 export function closeHistoryModal() {
-  const modal = document.getElementById("historyModal");
-  if (modal) {
-    modal.classList.add("hidden");
-  }
+    const modal = document.getElementById("historyModal");
+    if (modal) {
+        modal.classList.add("hidden");
+    }
 }
 
 // 🔗 ผูกฟังก์ชันเข้ากับ Global Window Object เพื่อให้ onclick บน HTML เรียกใช้งานได้ในระบบ ES Module
 window.openHistoryModal = openHistoryModal;
 window.closeHistoryModal = closeHistoryModal;
+
+// 📌 แจ้ง index.html ว่าโมดูลโหลดสำเร็จแล้ว (ใช้โดย inline fallback ใน index.html)
+window.__rxModuleReady = true;
