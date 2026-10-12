@@ -36,6 +36,45 @@ provider.setCustomParameters({
     prompt: 'select_account'
 });
 
+// 🏷️ 1.3 เลขรุ่นของไฟล์นี้ — ใช้ยืนยันว่าเบราว์เซอร์โหลดไฟล์ใหม่จริงหรือยังโหลดไฟล์เก่าจาก cache
+//     ⚠️ ทุกครั้งที่แก้ไฟล์นี้ ต้องแก้ค่านี้ + แก้ ?v= ใน index.html ให้ตรงกัน ไม่งั้นมือถือจะยังใช้ไฟล์เก่า
+const APP_BUILD = "2026-10-12-r4";
+
+// 🏷️ แสดงเลขรุ่นไฟล์มุมล่างของการ์ดเข้าสู่ระบบ (ถ้ามองไม่เห็น = เบราว์เซอร์ยังใช้ไฟล์เก่าอยู่)
+(function showBuildStamp() {
+    try {
+        const el = document.getElementById('buildStamp');
+        if (el) el.textContent = "เวอร์ชันไฟล์: " + APP_BUILD;
+    } catch (e) { }
+})();
+
+// 🧪 ร่องรอยการล็อกอินครั้งล่าสุด — ใช้ในหน้าต่าง "ข้อมูลวินิจฉัย"
+//    เก็บทุกกรณีรวมถึงกรณีที่ผู้ใช้ปิดหน้าต่างล็อกอินเอง (เดิมเงียบ ทำให้ตรวจสาเหตุไม่ได้)
+let lastLoginTrace = "(ยังไม่ได้ลองล็อกอินในหน้านี้)";
+function setLoginTrace(text, error) {
+    const code = (error && error.code) ? String(error.code) : "";
+    lastLoginTrace = text + (code ? " | code=" + code : "");
+}
+
+// 📌 ปุ่ม "ข้อมูลวินิจฉัย" — ให้ผู้ใช้กดดูแล้วส่งภาพหน้าจอมาได้เลย ไม่ต้องเปิด console
+window.showDiagnostics = async function () {
+    const box = document.getElementById('diagBox');
+    if (!box) return;
+    if (box.style.display === 'block') { box.style.display = 'none'; return; }
+    box.style.display = 'block';
+    box.textContent = "กำลังตรวจสอบ...";
+    let proxyOk = false;
+    try { proxyOk = await canUseRedirectFallback(); } catch (e) { proxyOk = false; }
+    box.textContent = [
+        "เวอร์ชันไฟล์: " + APP_BUILD,
+        buildDiagnostics(),
+        "ล็อกอินครั้งล่าสุด: " + lastLoginTrace,
+        "ทางเชื่อม /__/auth บนโดเมนนี้: " + (proxyOk ? "มี (ใช้วิธี Redirect ได้)" : "ไม่มี (ใช้วิธี Redirect ไม่ได้)"),
+        "เวลา: " + new Date().toLocaleString("th-TH"),
+        "เบราว์เซอร์: " + navigator.userAgent
+    ].join("\n");
+};
+
 // ตัวแปรส่วนกลาง (Global Variables)
 let rowCount = 1;
 let globalMaterialList = [];
@@ -84,6 +123,45 @@ function isMobileDevice() {
 //                   block third-party storage access" (แนะนำให้ใช้ Popup ถ้าไม่ได้ proxy)
 //    วิธีใหม่: ลอง Popup ก่อนเสมอทุกอุปกรณ์ และถอยไปใช้ Redirect เฉพาะตอน Popup ถูกบล็อกจริง ๆ
 
+// 📌 ตรวจว่า "ทางถอย" ไปใช้ Redirect ใช้ได้จริงหรือไม่
+//    การใช้ Redirect ต้องมี /__/auth บนโดเมนของเรา (reverse proxy ไป firebaseapp.com)
+//    ถ้าไม่ได้ตั้งไว้ (เช่นที่ pharm.buu.ac.th) Redirect จะพาไป Google แล้วเด้งกลับมาแบบเดิม
+//    → ตรวจก่อนว่าโดเมนเรามี /__/auth จริง ถ้าไม่มีจะได้ไม่พาผู้ใช้ไปวนซ้ำ
+let redirectFallbackCache = null;
+async function canUseRedirectFallback() {
+    if (redirectFallbackCache !== null) return redirectFallbackCache;
+    try {
+        const controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
+        const timer = controller ? setTimeout(() => controller.abort(), 4000) : null;
+        const res = await fetch(window.location.origin + "/__/auth/iframe", {
+            method: "GET",
+            cache: "no-store",
+            signal: controller ? controller.signal : undefined
+        });
+        if (timer) clearTimeout(timer);
+        redirectFallbackCache = !!res.ok;
+    } catch (e) {
+        redirectFallbackCache = false;
+    }
+    return redirectFallbackCache;
+}
+
+// 📌 ข้อความเมื่อมือถือเปิดป๊อปอัปไม่ได้ และยังไม่มี /__/auth ให้ถอยไปใช้
+const MOBILE_POPUP_BLOCKED_MESSAGE = [
+    "⛔ เบราว์เซอร์นี้ไม่ยอมเปิดหน้าต่างล็อกอินของ Google",
+    "",
+    "สาเหตุที่พบบ่อย",
+    "1) เปิดลิงก์จากในแอป LINE / Facebook / Messenger (เบราว์เซอร์ในแอปเปิดป๊อปอัปไม่ได้)",
+    "2) ตั้งค่า Safari ปิดกั้นป๊อปอัป",
+    "",
+    "วิธีแก้ที่ได้ผลที่สุด",
+    "1) กดไอคอน ⋯ มุมขวาบน แล้วเลือก \"เปิดใน Safari\" (หรือ \"เปิดในเบราว์เซอร์\")",
+    "2) หรือคัดลอกลิงก์ไปเปิดในแอป Safari / Chrome โดยตรง",
+    "3) ตั้งค่า → Safari → ปิด \"บล็อกป๊อปอัป\" แล้วลองใหม่",
+    "",
+    "ถ้ายังไม่ผ่าน กรุณาใช้เครื่องคอมพิวเตอร์เข้าใช้งานแทน"
+].join("\n");
+
 // 📌 ตรวจว่าเบราว์เซอร์ยอมให้เว็บไซต์เก็บข้อมูล
 //    ถ้า iPhone เปิด "บล็อกคุกกี้ทั้งหมด" หรืออยู่ในโหมดไม่ระบุตัวตน
 //    Firebase จะจำสถานะล็อกอินไม่ได้ → ล็อกอินเสร็จแล้วเด้งกลับหน้าล็อกอิน
@@ -124,7 +202,8 @@ function buildDiagnostics(extra) {
         "storage=" + (isLocalStorageUsable() ? "ปกติ" : "ถูกบล็อก"),
         "device=" + (isMobileDevice() ? "มือถือ" : "คอม"),
         "safari=" + (isIOSorSafari() ? "ใช่" : "ไม่"),
-        "user=" + (auth.currentUser ? auth.currentUser.email : "ยังไม่มี")
+        "user=" + (auth.currentUser ? auth.currentUser.email : "ยังไม่มี"),
+        "build=" + APP_BUILD
     ];
     if (extra) parts.push(extra);
     return parts.join(" | ");
@@ -235,9 +314,11 @@ window.loginWithGoogle = async function () {
 
     // ✅ ใช้ Popup ก่อนเสมอ ทุกอุปกรณ์ (ดูเหตุผลในคอมเมนต์ด้านบน)
     setPendingLoginFlag();
+    setLoginTrace("ลอง Popup");
     try {
         await signInWithPopup(auth, provider);
         clearPendingLoginFlag();
+        setLoginTrace("Popup สำเร็จ");
         if (statusEl) statusEl.innerText = "";
         return;
     } catch (error) {
@@ -247,6 +328,7 @@ window.loginWithGoogle = async function () {
         // ผู้ใช้กดปิดหน้าต่างล็อกอินเอง → หยุดเงียบ ๆ ไม่ต้องเด้งไปไหน
         if (code === 'auth/popup-closed-by-user' || code === 'auth/user-cancelled') {
             clearPendingLoginFlag();
+            setLoginTrace("ผู้ใช้ปิดหน้าต่างล็อกอินเอง", error);
             if (statusEl) statusEl.innerText = "";
             return;
         }
@@ -254,25 +336,40 @@ window.loginWithGoogle = async function () {
         // เบราว์เซอร์ไม่ให้เก็บข้อมูลเลย → แจ้งวิธีปิดการบล็อกคุกกี้
         if (code === 'auth/web-storage-unsupported') {
             clearPendingLoginFlag();
+            setLoginTrace("เบราว์เซอร์กั้นการเก็บข้อมูล", error);
             displayAuthMessage(STORAGE_BLOCKED_MESSAGE + "\n" + buildDiagnostics());
             return;
         }
 
-        // Popup ถูกบล็อกจริง ๆ → ค่อยถอยไปใช้ Redirect (ทางเลือกสุดท้าย)
+        // Popup ถูกบล็อกจริง ๆ → ถอยไปใช้ Redirect "เฉพาะเมื่อทางนั้นใช้ได้จริง"
         if (code === 'auth/popup-blocked' || code === 'auth/cancelled-popup-request' ||
             code === 'auth/operation-not-supported-in-this-environment') {
+
+            // ⛔ ถ้าโดเมนนี้ยังไม่ได้ตั้ง /__/auth การถอยไป Redirect = พาไปวนกลับมาหน้าล็อกอินเดิม
+            //    จึงบอกวิธีแก้ที่ทำได้จริงแทนการปล่อยให้ผู้ใช้วนซ้ำ
+            if (!(await canUseRedirectFallback())) {
+                clearPendingLoginFlag();
+                setLoginTrace("ป๊อปอัปถูกบล็อก และไม่มี /__/auth ให้ถอย", error);
+                if (statusEl) statusEl.innerText = "";
+                displayAuthMessage(MOBILE_POPUP_BLOCKED_MESSAGE + "\n" + buildDiagnostics());
+                return;
+            }
+
+            setLoginTrace("ป๊อปอัปถูกบล็อก → ถอยไป Redirect", error);
             if (statusEl) statusEl.innerHTML = `<span style="color:#C2761A;">⏳ หน้าต่างถูกบล็อก กำลังเปลี่ยนหน้าไป Google...</span>`;
             try {
                 await signInWithRedirect(auth, provider);
                 return;
             } catch (redirectError) {
                 clearPendingLoginFlag();
+                setLoginTrace("Redirect ล้มเหลว", redirectError);
                 displayAuthError(redirectError);
                 return;
             }
         }
 
         clearPendingLoginFlag();
+        setLoginTrace("Popup ล้มเหลวแบบอื่น", error);
         displayAuthError(error);
     }
 };

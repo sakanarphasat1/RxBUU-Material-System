@@ -55,6 +55,15 @@
             
             <div id="loginStatus" style="margin-top: 15px; font-size: 0.85rem; color: #0B8F70; font-weight: 500;"></div>
             <div id="authAlert" style="display: none; margin-top: 15px; padding: 12px; background-color: #FFF1F2; border: 1px solid #FFD0D4; border-radius: 12px; color: #B4272C; font-size: 0.85rem;"></div>
+
+            <!-- 🧪 ปุ่มดูข้อมูลวินิจฉัย: กดแล้วขึ้นรายละเอียดให้ส่งภาพหน้าจอให้ผู้ดูแลระบบได้เลย -->
+            <button type="button" onclick="showDiagnostics()" style="margin-top: 14px; background: none; border: none; color: #7C9A93; font-size: 0.78rem; text-decoration: underline; cursor: pointer; padding: 4px;">
+                ⓘ ข้อมูลวินิจฉัย (สำหรับแจ้งผู้ดูแลระบบ)
+            </button>
+            <pre id="diagBox" style="display: none; margin: 8px 0 0; text-align: left; font-size: 0.72rem; line-height: 1.6; color: #4B6B64; background: #F4F8F7; border: 1px solid #DCE8E5; border-radius: 10px; padding: 10px; white-space: pre-wrap; word-break: break-word; font-family: inherit;"></pre>
+
+            <!-- 🏷️ เลขรุ่นไฟล์: ใช้เช็กว่าเบราว์เซอร์โหลดไฟล์ใหม่แล้วหรือยัง (ลบได้เมื่อไม่ต้องการ) -->
+            <div id="buildStamp" style="margin-top: 18px; font-size: 0.7rem; color: #9BB3AC;"></div>
         </div>
 
         <!-- 📝 2. ส่วนฟอร์มบันทึกข้อมูล (Form Section - จะโหลด form.html มาแทรก) -->
@@ -130,7 +139,7 @@
     </div>
 
     <!-- ⚙️ ลิงก์เชื่อมโยงไปยังไฟล์ script.js (แบบ ES Module สำหรับ Firebase) -->
-    <script type="module" src="script.js?v=20261008-3"></script>
+    <script type="module" src="script.js?v=20261012-2"></script>
 
     <!-- ⚠️ สำรอง: ถ้า script.js โหลดไม่สำเร็จ (เครือข่ายช้า / gstatic ถูกบล็อก)
          ปุ่มล็อกอินจะ "ตายเงียบ" กดแล้วไม่มีอะไรเกิดขึ้น โดยเฉพาะบนมือถือ
